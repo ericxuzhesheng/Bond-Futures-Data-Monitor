@@ -20,9 +20,21 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
         for row in conn.execute("SELECT rate_name, rate_value FROM funding_rates WHERE date = ?", (run_date,))
     }
     futures = conn.execute(
-        "SELECT contract, daily_return, volume FROM futures_quotes WHERE date = ?",
+        "SELECT contract, daily_return, volume, data_source FROM futures_quotes WHERE date = ?",
         (run_date,),
     ).fetchall()
+    yield_sources = {
+        row["data_source"]
+        for row in conn.execute("SELECT DISTINCT data_source FROM bond_yields WHERE date = ?", (run_date,))
+    }
+    funding_sources = {
+        row["data_source"]
+        for row in conn.execute("SELECT DISTINCT data_source FROM funding_rates WHERE date = ?", (run_date,))
+    }
+    news_sources = {
+        row["data_source"]
+        for row in conn.execute("SELECT DISTINCT data_source FROM policy_news WHERE date = ?", (run_date,))
+    }
     ai_rows = conn.execute("SELECT bond_impact FROM ai_text_signals WHERE date = ?", (run_date,)).fetchall()
 
     futures_returns = [row["daily_return"] for row in futures]
@@ -49,6 +61,33 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
             "funding_rates": funding,
             "futures_contract_count": len(futures),
             "ai_signal_count": len(ai_scores),
+            "data_sources": {
+                "futures": sorted({row["data_source"] for row in futures}),
+                "yield_curve": sorted(yield_sources),
+                "funding": sorted(funding_sources),
+                "policy_news": sorted(news_sources),
+            },
+            "feature_groups": {
+                "rates": {
+                    "yield_10y_change": yield_10y_change,
+                    "yield_30y_change": yield_30y_change,
+                    "spread_10y_2y": _spread(yields, "10Y", "2Y"),
+                    "spread_30y_10y": _spread(yields, "30Y", "10Y"),
+                },
+                "funding": {
+                    "dr007_change": dr007_change,
+                    "available_rates": sorted(funding),
+                },
+                "futures": {
+                    "avg_futures_return": mean(futures_returns) if futures_returns else None,
+                    "avg_volume_change": 0.08 if volumes else None,
+                    "contract_count": len(futures),
+                },
+                "text": {
+                    "avg_ai_sentiment_score": mean(ai_scores) if ai_scores else 0.0,
+                    "signal_count": len(ai_scores),
+                },
+            },
             "note": "Change features use sample prior-day approximations in MVP fallback mode.",
         },
     }

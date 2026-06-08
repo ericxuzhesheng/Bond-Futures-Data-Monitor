@@ -13,5 +13,8 @@ def test_daily_report_generation(tmp_path):
     content = report_path.read_text(encoding="utf-8")
     assert report_path.exists()
     assert "每日市场判断" in content
+    assert "评分拆解" in content
+    assert "特征面板" in content
+    assert "数据源与质量" in content
     assert "国债期货概览" in content
     assert "AI 政策与新闻解读" in content

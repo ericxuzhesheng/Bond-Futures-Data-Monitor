@@ -21,6 +21,12 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
 
     key_drivers = json.loads(signal["key_drivers"])
     risk_notes = json.loads(signal["risk_notes"])
+    signal_details = json.loads(signal["details_json"])
+    score_items = signal_details.get("score_items", [])
+    feature_snapshot = signal_details.get("feature_snapshot", {})
+    feature_details = feature_snapshot.get("details", {})
+    feature_groups = feature_details.get("feature_groups", {})
+    data_sources = feature_details.get("data_sources", {})
     view_label = _market_view_label(signal["market_view"])
 
     lines = [
@@ -30,10 +36,43 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         f"- 市场观点：**{view_label}**",
         f"- 综合评分：**{signal['total_score']:.2f}**",
         "",
+        "## 评分拆解",
+        "| 维度 | 分数 | 判断依据 |",
+        "|---|---:|---|",
+    ]
+    if score_items:
+        lines.extend(
+            f"| {item['category']} | {float(item['score']):.2f} | {item['reason']} |"
+            for item in score_items
+        )
+    else:
+        lines.append("| 无 | 0.00 | 当日没有触发明确方向规则。 |")
+    lines.extend(
+        [
+            "",
+            "## 特征面板",
+            "| 分组 | 指标 | 数值 |",
+            "|---|---|---:|",
+        ]
+    )
+    lines.extend(_feature_panel_rows(feature_groups))
+    lines.extend(
+        [
+            "",
+            "## 数据源与质量",
+            "| 数据类别 | 来源 |",
+            "|---|---|",
+        ]
+    )
+    lines.extend(_data_source_rows(data_sources))
+    lines.extend(
+        [
+            "",
         "## 国债期货概览",
         "| 合约 | 收盘价 | 日收益率 | 成交量 | 持仓量 |",
         "|---|---:|---:|---:|---:|",
-    ]
+        ]
+    )
     lines.extend(
         f"| {row['contract']} | {row['close_price']:.3f} | {row['daily_return']:.4%} | "
         f"{row['volume']:.0f} | {row['open_interest']:.0f} |"
@@ -111,3 +150,51 @@ def _event_type_label(value: str) -> str:
         "overseas_rates": "海外利率",
         "other": "其他",
     }.get(value, value)
+
+
+def _feature_panel_rows(feature_groups: dict) -> list[str]:
+    rows: list[str] = []
+    labels = {
+        "yield_10y_change": "10Y 收益率变化",
+        "yield_30y_change": "30Y 收益率变化",
+        "spread_10y_2y": "10Y-2Y 利差",
+        "spread_30y_10y": "30Y-10Y 利差",
+        "dr007_change": "DR007 变化",
+        "available_rates": "可用资金利率",
+        "avg_futures_return": "期货平均日收益率",
+        "avg_volume_change": "成交活跃度变化",
+        "contract_count": "覆盖合约数量",
+        "avg_ai_sentiment_score": "文本情绪均值",
+        "signal_count": "文本信号数量",
+    }
+    group_labels = {"rates": "利率", "funding": "资金面", "futures": "期货量价", "text": "文本"}
+    for group, values in feature_groups.items():
+        if not isinstance(values, dict):
+            continue
+        for key, value in values.items():
+            rows.append(f"| {group_labels.get(group, group)} | {labels.get(key, key)} | {_format_feature_value(value)} |")
+    return rows or ["| 无 | 无 | 无 |"]
+
+
+def _data_source_rows(data_sources: dict) -> list[str]:
+    labels = {
+        "futures": "国债期货",
+        "yield_curve": "收益率曲线",
+        "funding": "资金利率",
+        "policy_news": "政策/新闻",
+    }
+    rows = []
+    for key, values in data_sources.items():
+        source = ", ".join(values) if isinstance(values, list) else str(values)
+        rows.append(f"| {labels.get(key, key)} | {source or '无'} |")
+    return rows or ["| 无 | 无 |"]
+
+
+def _format_feature_value(value) -> str:
+    if value is None:
+        return "缺失"
+    if isinstance(value, float):
+        return f"{value:.4f}"
+    if isinstance(value, list):
+        return ", ".join(map(str, value)) or "无"
+    return str(value)
