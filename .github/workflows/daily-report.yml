@@ -1,0 +1,71 @@
+name: Daily Bond Futures Report
+
+on:
+  schedule:
+    # Beijing time 19:00 = UTC 11:00.
+    - cron: "0 11 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      run_date:
+        description: "Run date in YYYY-MM-DD format, or today for Asia/Shanghai"
+        required: false
+        default: "today"
+
+permissions:
+  contents: write
+
+jobs:
+  daily-report:
+    runs-on: ubuntu-latest
+    env:
+      USE_LIVE_DATA: "1"
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      DATABASE_PATH: data/bond_futures_monitor.db
+      REPORTS_OUTPUT_DIR: reports_output
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Resolve run date
+        shell: bash
+        run: |
+          INPUT_DATE="${{ github.event.inputs.run_date }}"
+          if [ -z "$INPUT_DATE" ]; then
+            INPUT_DATE="today"
+          fi
+          if [ "$INPUT_DATE" = "today" ]; then
+            RUN_DATE=$(TZ=Asia/Shanghai date +%F)
+          else
+            RUN_DATE="$INPUT_DATE"
+          fi
+          echo "RUN_DATE=$RUN_DATE" >> "$GITHUB_ENV"
+
+      - name: Run daily monitor
+        run: python -m bond_futures_monitor.cli run --date "$RUN_DATE"
+
+      - name: Run tests
+        run: pytest
+
+      - name: Commit report
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "reports_output/${RUN_DATE}_daily_report.md"
+          if git diff --cached --quiet; then
+            echo "No report changes to commit."
+          else
+            git commit -m "report: update daily bond futures report ${RUN_DATE}"
+            git push
+          fi

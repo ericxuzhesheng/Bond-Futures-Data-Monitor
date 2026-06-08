@@ -147,6 +147,34 @@ python -m bond_futures_monitor.cli run --date 2026-06-08
 python -m bond_futures_monitor.cli generate-report --date 2026-06-08
 ```
 
+### GitHub Actions 自动日报
+
+仓库已内置 GitHub Actions workflow：
+
+```text
+.github/workflows/daily-report.yml
+```
+
+自动运行规则：
+
+| 项目 | 设置 |
+|---|---|
+| 运行时间 | 北京时间每个工作日 19:00 |
+| GitHub cron | `0 11 * * 1-5` |
+| 数据模式 | `USE_LIVE_DATA=1` |
+| 输出文件 | `reports_output/YYYY-MM-DD_daily_report.md` |
+| 提交方式 | 由 `github-actions[bot]` 自动 commit 到 `main` |
+
+使用前需要在 GitHub 仓库配置 Secret：
+
+```text
+Settings -> Secrets and variables -> Actions -> New repository secret
+Name: TUSHARE_TOKEN
+Value: 你的 Tushare token
+```
+
+也可以在 GitHub Actions 页面手动触发 `Daily Bond Futures Report`，并指定 `run_date`；默认值 `today` 会按北京时间解析。
+
 ### 输出示例
 
 运行后会生成：

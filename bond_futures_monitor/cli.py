@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from bond_futures_monitor.ai.text_signal import classify_news_item
 from bond_futures_monitor.collectors.funding import collect_funding_rates
@@ -37,13 +38,15 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("init-db", help="Initialize the SQLite database")
 
     run_parser = subparsers.add_parser("run", help="Run the full daily pipeline")
-    run_parser.add_argument("--date", default=date.today().isoformat(), help="Run date in YYYY-MM-DD format")
+    run_parser.add_argument("--date", default="today", help="Run date in YYYY-MM-DD format, or 'today' for Asia/Shanghai")
 
     report_parser = subparsers.add_parser("generate-report", help="Generate daily Markdown report")
-    report_parser.add_argument("--date", default=date.today().isoformat(), help="Report date in YYYY-MM-DD format")
+    report_parser.add_argument("--date", default="today", help="Report date in YYYY-MM-DD format, or 'today' for Asia/Shanghai")
 
     args = parser.parse_args(argv)
     settings = get_settings()
+    if hasattr(args, "date"):
+        args.date = resolve_run_date(args.date)
 
     with connect(settings.database_path) as conn:
         if args.command == "init-db":
@@ -90,6 +93,15 @@ def run_daily_pipeline(conn, run_date: str, use_live_data: bool, reports_output_
     upsert_daily_market_signal(conn, signal)
 
     generate_daily_report(conn, run_date, reports_output_dir)
+
+
+def resolve_run_date(value: str) -> str:
+    """Resolve a CLI date argument."""
+
+    if value.lower() == "today":
+        return datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    date.fromisoformat(value)
+    return value
 
 
 if __name__ == "__main__":
