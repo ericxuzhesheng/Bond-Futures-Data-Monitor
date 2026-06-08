@@ -35,7 +35,21 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
         row["data_source"]
         for row in conn.execute("SELECT DISTINCT data_source FROM policy_news WHERE date = ?", (run_date,))
     }
-    ai_rows = conn.execute("SELECT bond_impact FROM ai_text_signals WHERE date = ?", (run_date,)).fetchall()
+    ai_rows = conn.execute(
+        """
+        SELECT signal.bond_impact
+        FROM ai_text_signals AS signal
+        JOIN (
+            SELECT news_id, MAX(id) AS latest_id
+            FROM ai_text_signals
+            WHERE date = ?
+            GROUP BY news_id
+        ) AS latest
+          ON latest.latest_id = signal.id
+        ORDER BY signal.news_id
+        """,
+        (run_date,),
+    ).fetchall()
 
     futures_returns = [row["daily_return"] for row in futures]
     volumes = {row["contract"]: row["volume"] for row in futures}

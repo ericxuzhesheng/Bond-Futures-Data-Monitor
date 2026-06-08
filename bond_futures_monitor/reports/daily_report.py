@@ -13,7 +13,21 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     futures = conn.execute("SELECT * FROM futures_quotes WHERE date = ? ORDER BY contract", (run_date,)).fetchall()
     yields = conn.execute("SELECT * FROM bond_yields WHERE date = ? ORDER BY tenor", (run_date,)).fetchall()
     funding = conn.execute("SELECT * FROM funding_rates WHERE date = ? ORDER BY rate_name", (run_date,)).fetchall()
-    ai = conn.execute("SELECT * FROM ai_text_signals WHERE date = ? ORDER BY id", (run_date,)).fetchall()
+    ai = conn.execute(
+        """
+        SELECT signal.*
+        FROM ai_text_signals AS signal
+        JOIN (
+            SELECT news_id, MAX(id) AS latest_id
+            FROM ai_text_signals
+            WHERE date = ?
+            GROUP BY news_id
+        ) AS latest
+          ON latest.latest_id = signal.id
+        ORDER BY signal.id
+        """,
+        (run_date,),
+    ).fetchall()
     signal = conn.execute("SELECT * FROM daily_market_signals WHERE date = ?", (run_date,)).fetchone()
 
     if signal is None:

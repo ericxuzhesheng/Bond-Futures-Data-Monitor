@@ -284,6 +284,25 @@ def purge_sample_fallback_for_date(conn: sqlite3.Connection, run_date: str) -> N
     conn.commit()
 
 
+def purge_superseded_ai_signals_for_date(conn: sqlite3.Connection, run_date: str) -> None:
+    """Keep only the latest AI text signal per news item for a date."""
+
+    conn.execute(
+        """
+        DELETE FROM ai_text_signals
+        WHERE date = ?
+          AND id NOT IN (
+              SELECT MAX(id)
+              FROM ai_text_signals
+              WHERE date = ?
+              GROUP BY news_id
+          )
+        """,
+        (run_date, run_date),
+    )
+    conn.commit()
+
+
 def fetch_policy_news(conn: sqlite3.Connection, date: str) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM policy_news WHERE date = ? ORDER BY id", (date,)).fetchall()
 

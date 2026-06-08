@@ -55,7 +55,6 @@ def generate_market_signal(features: dict[str, Any]) -> dict[str, Any]:
     sources = details.get("data_sources", {}) if isinstance(details, dict) else {}
     if any("sample_fallback" in values for values in sources.values() if isinstance(values, list)):
         risks.append("部分数据来自样例回退源，需谨慎解读当日结论。")
-    risks.append("当实时数据源不可用时，MVP 会使用样例回退数据。")
     risks.append("该信号是规则化研究输出，不是价格预测或交易建议。")
 
     if score >= 2:

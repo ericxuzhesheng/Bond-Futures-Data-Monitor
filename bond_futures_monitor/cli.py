@@ -23,6 +23,7 @@ from bond_futures_monitor.database import (
     insert_policy_news,
     log_run,
     purge_sample_fallback_for_date,
+    purge_superseded_ai_signals_for_date,
     upsert_daily_features,
     upsert_daily_market_signal,
 )
@@ -85,6 +86,7 @@ def run_daily_pipeline(conn, run_date: str, use_live_data: bool, reports_output_
 
     for row in fetch_policy_news(conn, run_date):
         insert_ai_text_signal(conn, classify_news_item(dict(row)))
+    purge_superseded_ai_signals_for_date(conn, run_date)
 
     features = build_daily_features(conn, run_date)
     upsert_daily_features(conn, features)
