@@ -7,7 +7,7 @@ import os
 
 def collect_policy_news(run_date: str, use_live_data: bool = False) -> list[dict[str, object]]:
     if use_live_data:
-        live_rows = _try_collect_live_news(run_date)
+        live_rows = _try_collect_tushare_news(run_date)
         if live_rows:
             return live_rows
     return sample_policy_news(run_date)
@@ -40,7 +40,7 @@ def sample_policy_news(run_date: str) -> list[dict[str, object]]:
     ]
 
 
-def _try_collect_live_news(run_date: str) -> list[dict[str, object]]:
+def _try_collect_tushare_news(run_date: str) -> list[dict[str, object]]:
     try:
         import tushare as ts  # type: ignore
     except Exception:

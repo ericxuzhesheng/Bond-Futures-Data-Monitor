@@ -8,7 +8,7 @@ from datetime import date as Date
 
 def collect_funding_rates(run_date: str, use_live_data: bool = False) -> list[dict[str, object]]:
     if use_live_data:
-        live_rows = _try_collect_akshare(run_date)
+        live_rows = _try_collect_tushare(run_date)
         if live_rows:
             return live_rows
     return sample_funding_rates(run_date)
@@ -28,7 +28,7 @@ def sample_funding_rates(run_date: str) -> list[dict[str, object]]:
     ]
 
 
-def _try_collect_akshare(run_date: str) -> list[dict[str, object]]:
+def _try_collect_tushare(run_date: str) -> list[dict[str, object]]:
     try:
         import tushare as ts  # type: ignore
     except Exception:
