@@ -159,8 +159,8 @@ python -m bond_futures_monitor.cli generate-report --date 2026-06-08
 
 | 项目 | 设置 |
 |---|---|
-| 运行时间 | 北京时间每个工作日 19:00 |
-| GitHub cron | `0 11 * * 1-5` |
+| 运行时间 | 北京时间每天 19:00 |
+| GitHub cron | `0 11 * * *` |
 | 数据模式 | `USE_LIVE_DATA=1` |
 | 输出文件 | `reports_output/YYYY-MM-DD_daily_report.md` |
 | 提交方式 | 由 `github-actions[bot]` 自动 commit 到 `main` |
