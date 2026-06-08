@@ -44,6 +44,31 @@
 | 政策与新闻 | 央行、流动性、宏观、供给、风险偏好 | Tushare 新闻 / 样例回退 |
 | 文本结构化信号 | 事件类型、影响方向、置信度、推理链条 | 确定性规则分类器 |
 
+### AI 文本信号层
+
+AI 层只负责把非结构化政策/新闻文本转为固定收益研究信号，不直接预测国债期货价格。
+
+每条文本会被结构化为：
+
+| 字段 | 含义 |
+|---|---|
+| `event_type` | 事件类型，如货币政策、债券供给、资金流动性等 |
+| `summary` | 中文摘要 |
+| `bond_impact` | 偏多、偏空或中性 |
+| `affected_maturity` | 短端、中段、长端、全曲线或不明确 |
+| `related_contracts` | 相关国债期货合约 |
+| `confidence` | 1 到 5 的置信度 |
+| `reasoning` | 事件到收益率再到国债期货的传导链条 |
+
+当前支持两种后端（共享同一 schema，可无缝切换）：
+
+| 后端 | 触发条件 | 说明 |
+|---|---|---|
+| Claude LLM（`claude-haiku-4-5-20251001`）| 设置了 `ANTHROPIC_API_KEY` | 真实语义理解，输出 JSON 后做 schema 校验 |
+| 规则分类器（`rule-based-text-signal-v2`）| 未设置 API key 或 API 调用失败 | 覆盖 8 种 event_type 的关键词映射，编码固定收益领域知识 |
+
+规则分类器覆盖：货币政策、资金流动性、债券供给、通胀、宏观增长、财政政策、海外利率、风险偏好，以及 `other` 兜底。每种事件类型都进一步区分偏多/偏空/中性三个方向。
+
 ### 主要输出
 
 | 输出 | 说明 |
@@ -105,11 +130,13 @@ DATABASE_PATH=data/bond_futures_monitor.db
 REPORTS_OUTPUT_DIR=reports_output
 USE_LIVE_DATA=1
 TUSHARE_TOKEN=你的TushareToken
+ANTHROPIC_API_KEY=你的LLM密钥（可选）
 ```
 
 说明：
 - `USE_LIVE_DATA=1` 是默认值
 - 如果没有可用 live 数据源，系统会回退到样例数据
+- `ANTHROPIC_API_KEY` 是可选参数，用于启用真实 LLM 文本分析
 - 本地 `.env` 不会提交到仓库
 
 #### 3. 初始化数据库
@@ -124,7 +151,7 @@ python -m bond_futures_monitor.cli init-db
 python -m bond_futures_monitor.cli run --date 2026-06-08
 ```
 
-如果不指定日期，GitHub Actions 会默认按”今天（北京时间）”执行。
+如果不指定日期，GitHub Actions 会默认按"今天（北京时间）"执行。
 
 #### 5. 仅生成日报
 
@@ -245,6 +272,31 @@ The goal is not to predict prices. The goal is to make the full pipeline reliabl
 | Policy & news | PBOC, liquidity, macro, supply, risk appetite | Tushare news / sample fallback |
 | Text signals | Event type, impact direction, confidence, reasoning | Deterministic rule-based classifier |
 
+### AI text signal layer
+
+The AI layer converts unstructured policy/news text into structured fixed-income research signals. It does not directly predict futures prices.
+
+Each article is structured into:
+
+| Field | Description |
+|---|---|
+| `event_type` | Monetary policy, bond supply, funding liquidity, etc. |
+| `summary` | Chinese summary |
+| `bond_impact` | Bullish, bearish, or neutral |
+| `affected_maturity` | Short end, belly, long end, full curve, or unclear |
+| `related_contracts` | Related treasury futures contracts |
+| `confidence` | 1 to 5 confidence score |
+| `reasoning` | Causal chain: event → yield impact → futures implication |
+
+Two backends share the same schema:
+
+| Backend | When | Description |
+|---|---|---|
+| Claude LLM (`claude-haiku-4-5-20251001`) | `ANTHROPIC_API_KEY` is set | Real semantic understanding, JSON output with schema validation |
+| Rule-based classifier (`rule-based-text-signal-v2`) | No API key or API failure | 8 event types via keyword mapping, encoding fixed-income domain knowledge |
+
+The rule-based classifier covers: monetary policy, funding liquidity, bond supply, inflation, macro growth, fiscal policy, overseas rates, risk sentiment, with `other` as fallback. Each event type supports bullish/bearish/neutral sub-classification.
+
 ### Outputs
 
 | Output | Description |
@@ -306,11 +358,13 @@ DATABASE_PATH=data/bond_futures_monitor.db
 REPORTS_OUTPUT_DIR=reports_output
 USE_LIVE_DATA=1
 TUSHARE_TOKEN=your_tushare_token
+ANTHROPIC_API_KEY=your_llm_key（optional）
 ```
 
 Notes:
 - `USE_LIVE_DATA=1` is the default
 - If live sources are unavailable, the pipeline falls back to sample data
+- `ANTHROPIC_API_KEY` is optional — enables real LLM text analysis when set
 - Local `.env` files are not committed to the repository
 
 #### 3. Initialize the database
@@ -325,7 +379,7 @@ python -m bond_futures_monitor.cli init-db
 python -m bond_futures_monitor.cli run --date 2026-06-08
 ```
 
-If you omit the date, GitHub Actions resolves it as “today” in Beijing time.
+If you omit the date, GitHub Actions resolves it as "today" in Beijing time.
 
 #### 5. Generate a report only
 

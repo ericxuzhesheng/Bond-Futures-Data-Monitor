@@ -4,3 +4,5 @@ pytest>=8.0
 tushare>=1.4
 # Optional live-data dependency. The MVP falls back to sample data if unavailable.
 akshare>=1.14
+# Optional: enables real LLM text analysis. Falls back to rule-based classifier when absent.
+anthropic>=0.40

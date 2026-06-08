@@ -23,6 +23,7 @@ class Settings:
     database_path: Path = Path(os.getenv("DATABASE_PATH", "data/bond_futures_monitor.db"))
     reports_output_dir: Path = Path(os.getenv("REPORTS_OUTPUT_DIR", "reports_output"))
     use_live_data: bool = field(default_factory=_default_use_live_data)
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
 
 
 def get_settings() -> Settings:
