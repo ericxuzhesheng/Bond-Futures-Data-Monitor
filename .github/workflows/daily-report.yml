@@ -2,8 +2,9 @@ name: Daily Bond Futures Report
 
 on:
   schedule:
-    # Beijing time 19:00 = UTC 11:00.
-    - cron: "0 11 * * *"
+    # Beijing time 19:07 = UTC 11:07.
+    # GitHub scheduled workflows can be delayed or dropped at the start of the hour.
+    - cron: "7 11 * * *"
   workflow_dispatch:
     inputs:
       run_date:
