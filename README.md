@@ -177,6 +177,22 @@ Name: TUSHARE_TOKEN
 Value: 你的 Tushare token
 ```
 
+#### Windows 本地任务计划程序
+
+也可以在本机注册 Windows Task Scheduler 任务，每天本地时间 19:01 运行：
+
+```powershell
+.\scripts\register_windows_task.ps1
+```
+
+默认任务名为 `BondFuturesDataMonitorDaily`，任务会调用：
+
+```powershell
+.\scripts\run_daily_local.ps1
+```
+
+本地运行日志会写入 `logs/daily-monitor-YYYYMMDD-HHMMSS.log`。任务运行时会在项目根目录加载 `.env`，因此本机需要先配置好 `TUSHARE_TOKEN` 等环境变量。
+
 ### 判断逻辑
 
 系统会从以下维度做简单规则判断：
@@ -404,6 +420,22 @@ You need to configure the following secret in GitHub:
 Name: TUSHARE_TOKEN
 Value: your Tushare token
 ```
+
+#### Windows Task Scheduler
+
+You can also register a local Windows scheduled task that runs every day at 19:01 local time:
+
+```powershell
+.\scripts\register_windows_task.ps1
+```
+
+The default task name is `BondFuturesDataMonitorDaily`. It runs:
+
+```powershell
+.\scripts\run_daily_local.ps1
+```
+
+Local run logs are written to `logs/daily-monitor-YYYYMMDD-HHMMSS.log`. The task runs from the repository root and loads `.env`, so configure local credentials such as `TUSHARE_TOKEN` first.
 
 ### Judgment logic
 

@@ -6,6 +6,7 @@ __pycache__/
 .env
 data/
 reports_output/
+logs/
 *.db
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
