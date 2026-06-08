@@ -51,10 +51,10 @@ def _try_collect_akshare(run_date: str) -> list[dict[str, object]]:
     try:
         daily = ak.get_cffex_daily(date=trade_date)
     except Exception:
-        return []
+        daily = None
 
-    if daily.empty or "variety" not in daily.columns:
-        return []
+    if daily is None or daily.empty or "variety" not in daily.columns:
+        return _try_collect_sina_main(ak, run_date)
 
     rows: list[dict[str, object]] = []
     for contract in CONTRACTS:
@@ -75,6 +75,39 @@ def _try_collect_akshare(run_date: str) -> list[dict[str, object]]:
                 "volume": float(main["volume"]),
                 "open_interest": float(main["open_interest"]),
                 "data_source": "akshare_cffex_daily",
+            }
+        )
+    return rows
+
+
+def _try_collect_sina_main(ak, run_date: str) -> list[dict[str, object]]:
+    """Collect main continuous Treasury futures from Sina via AKShare."""
+
+    rows: list[dict[str, object]] = []
+    symbol_map = {"TS": "TS0", "TF": "TF0", "T": "T0", "TL": "TL0"}
+    for contract, symbol in symbol_map.items():
+        try:
+            history = ak.futures_zh_daily_sina(symbol=symbol)
+        except Exception:
+            continue
+        if history.empty or "date" not in history.columns:
+            continue
+        matched = history[history["date"].astype(str) == run_date]
+        if matched.empty:
+            continue
+        row = matched.iloc[-1]
+        close_price = float(row["close"])
+        open_price = float(row["open"])
+        daily_return = close_price / open_price - 1 if open_price else 0.0
+        rows.append(
+            {
+                "date": run_date,
+                "contract": contract,
+                "close_price": close_price,
+                "daily_return": daily_return,
+                "volume": float(row["volume"]),
+                "open_interest": float(row["hold"]),
+                "data_source": "akshare_sina_main_daily",
             }
         )
     return rows
