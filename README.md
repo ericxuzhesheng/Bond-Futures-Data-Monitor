@@ -124,7 +124,7 @@ python -m bond_futures_monitor.cli init-db
 python -m bond_futures_monitor.cli run --date 2026-06-08
 ```
 
-如果不指定日期，GitHub Actions 和远程任务会默认按“今天（北京时间）”执行。
+如果不指定日期，GitHub Actions 会默认按”今天（北京时间）”执行。
 
 #### 5. 仅生成日报
 
@@ -204,7 +204,7 @@ pytest
 - 数据源说明
 - 运行步骤
 - 一页设计说明
-- 1~2 张生成日报截图
+- 1～2 张生成日报截图
 
 ### 后续可以继续做的事
 
@@ -325,7 +325,7 @@ python -m bond_futures_monitor.cli init-db
 python -m bond_futures_monitor.cli run --date 2026-06-08
 ```
 
-If you omit the date, GitHub Actions and remote triggers resolve it as “today” in Beijing time.
+If you omit the date, GitHub Actions resolves it as “today” in Beijing time.
 
 #### 5. Generate a report only
 
