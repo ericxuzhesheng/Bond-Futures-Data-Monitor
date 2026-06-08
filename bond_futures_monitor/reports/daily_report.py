@@ -28,6 +28,7 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     feature_groups = feature_details.get("feature_groups", {})
     data_sources = feature_details.get("data_sources", {})
     view_label = _market_view_label(signal["market_view"])
+    fallback_sources = _fallback_sources(data_sources)
 
     lines = [
         f"# 中国国债期货每日监控报告 - {run_date}",
@@ -56,6 +57,15 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         ]
     )
     lines.extend(_feature_panel_rows(feature_groups))
+    if fallback_sources:
+        lines.extend(
+            [
+                "",
+                "## 数据质量提示",
+                "- 以下数据类别仍来自样例回退源，不代表当日实时行情：",
+            ]
+        )
+        lines.extend(f"  - {item}" for item in fallback_sources)
     lines.extend(
         [
             "",
@@ -188,6 +198,20 @@ def _data_source_rows(data_sources: dict) -> list[str]:
         source = ", ".join(values) if isinstance(values, list) else str(values)
         rows.append(f"| {labels.get(key, key)} | {source or '无'} |")
     return rows or ["| 无 | 无 |"]
+
+
+def _fallback_sources(data_sources: dict) -> list[str]:
+    labels = {
+        "futures": "国债期货",
+        "yield_curve": "收益率曲线",
+        "funding": "资金利率",
+        "policy_news": "政策/新闻",
+    }
+    fallback = []
+    for key, values in data_sources.items():
+        if isinstance(values, list) and any(source == "sample_fallback" for source in values):
+            fallback.append(labels.get(key, key))
+    return fallback
 
 
 def _format_feature_value(value) -> str:

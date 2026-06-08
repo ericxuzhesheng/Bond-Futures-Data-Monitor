@@ -1,5 +1,6 @@
 from bond_futures_monitor.collectors.futures import sample_futures_quotes
 from bond_futures_monitor.database import connect, init_db, insert_futures_quotes
+from bond_futures_monitor.config import get_settings
 
 
 def test_database_initialization(tmp_path):
@@ -26,3 +27,8 @@ def test_duplicate_insert_handling(tmp_path):
     assert first == 4
     assert second == 0
     assert count == 4
+
+
+def test_live_data_is_default(monkeypatch):
+    monkeypatch.delenv("USE_LIVE_DATA", raising=False)
+    assert get_settings().use_live_data is True

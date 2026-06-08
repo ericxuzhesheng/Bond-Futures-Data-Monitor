@@ -18,3 +18,4 @@ def test_daily_report_generation(tmp_path):
     assert "数据源与质量" in content
     assert "国债期货概览" in content
     assert "AI 政策与新闻解读" in content
+    assert "数据质量提示" in content
