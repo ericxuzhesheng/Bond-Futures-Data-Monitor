@@ -91,7 +91,8 @@ def _classify_with_llm(text: str) -> dict[str, Any] | None:
         raw = msg.content[0].text.strip()
         if raw.startswith("```"):
             parts = raw.split("```")
-            raw = parts[1][4:] if parts[1].startswith("json") else parts[1]
+            content = parts[1]
+            raw = content[4:].lstrip() if content.startswith("json") else content.lstrip()
         result: dict[str, Any] = json.loads(raw)
         if result.get("event_type") not in EVENT_TYPES:
             result["event_type"] = "other"
