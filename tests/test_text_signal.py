@@ -2,7 +2,7 @@ from bond_futures_monitor.ai.schema import AFFECTED_MATURITIES, BOND_IMPACTS, CO
 from bond_futures_monitor.ai.text_signal import classify_news_item
 
 
-def test_mock_ai_text_signal_output_schema():
+def test_rule_based_text_signal_output_schema():
     signal = classify_news_item(
         {
             "id": 1,

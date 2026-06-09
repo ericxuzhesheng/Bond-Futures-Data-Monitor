@@ -2,7 +2,7 @@ pandas>=2.0
 python-dotenv>=1.0
 pytest>=8.0
 tushare>=1.4
-# Optional live-data dependency. The MVP falls back to sample data if unavailable.
+# Required live-data dependency for CFFEX Treasury futures quotes.
 akshare>=1.14
-# Optional: enables real LLM text analysis. Falls back to rule-based classifier when absent.
+# Optional: enables Claude text analysis. The built-in rule engine remains available.
 anthropic>=0.40

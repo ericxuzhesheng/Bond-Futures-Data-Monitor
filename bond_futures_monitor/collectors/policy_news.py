@@ -1,86 +1,175 @@
-"""Policy and news text collector."""
+"""Policy and market-news text collector."""
 
 from __future__ import annotations
 
 import os
 
 
-def collect_policy_news(run_date: str, use_live_data: bool = False) -> list[dict[str, object]]:
-    if use_live_data:
-        live_rows = _try_collect_tushare_news(run_date)
-        if live_rows:
-            return live_rows
-    return sample_policy_news(run_date)
+CORE_RATE_TERMS = (
+    "央行",
+    "人民银行",
+    "国债",
+    "国债期货",
+    "利率债",
+    "地方债",
+    "专项债",
+    "特别国债",
+    "超长期特别国债",
+    "公开市场",
+    "逆回购",
+    "MLF",
+    "LPR",
+    "降准",
+    "降息",
+    "DR007",
+    "SHIBOR",
+    "银行间",
+    "财政部",
+    "国家发改委",
+)
+
+MACRO_RATE_TERMS = (
+    "货币",
+    "流动性",
+    "资金",
+    "利率",
+    "债券",
+    "财政",
+    "宏观",
+    "CPI",
+    "PPI",
+    "PMI",
+    "金融风险",
+)
+
+NOISE_TERMS = (
+    "ETF",
+    "美股",
+    "标普500",
+    "纳斯达克",
+    "道琼斯",
+    "加密货币",
+    "亚马逊",
+    "苹果",
+    "英伟达",
+    "股票",
+    "拟减持",
+    "股份",
+    "回购股份",
+    "增持",
+    "持股",
+    "资金加仓",
+    "员工持股",
+    "重大资产重组",
+    "全资子公司",
+    "债务融资工具",
+)
+
+GOVERNMENT_RATE_ANCHORS = (
+    "央行",
+    "人民银行",
+    "国债",
+    "国债期货",
+    "利率债",
+    "地方债",
+    "专项债",
+    "特别国债",
+    "财政部",
+    "国家发改委",
+    "银行间",
+    "DR007",
+    "SHIBOR",
+    "MLF",
+    "LPR",
+    "降准",
+    "降息",
+    "货币政策",
+)
+
+HIGH_AUTHORITY_ANCHORS = (
+    "央行",
+    "人民银行",
+    "国债",
+    "国债期货",
+    "利率债",
+    "地方债",
+    "专项债",
+    "特别国债",
+    "财政部",
+    "国家发改委",
+)
 
 
-def sample_policy_news(run_date: str) -> list[dict[str, object]]:
-    return [
-        {
-            "date": run_date,
-            "title": "央行通过公开市场操作投放流动性",
-            "source": "样例政策数据",
-            "content": (
-                "央行开展净投放操作，维护银行体系流动性合理充裕。操作后资金利率有所回落，"
-                "短端流动性环境边际改善。"
-            ),
-            "url": "https://example.com/pboc-liquidity-sample",
-            "data_source": "sample_fallback",
-        },
-        {
-            "date": run_date,
-            "title": "本月地方政府债供给预计增加",
-            "source": "样例宏观数据",
-            "content": (
-                "市场预计地方政府债发行规模上升，可能增加久期供给压力，并对长端利率债情绪"
-                "形成一定扰动。"
-            ),
-            "url": "https://example.com/bond-supply-sample",
-            "data_source": "sample_fallback",
-        },
-    ]
+def collect_policy_news(run_date: str, use_live_data: bool = True) -> list[dict[str, object]]:
+    """Collect real policy/news text from Tushare news feeds."""
+
+    if not use_live_data:
+        raise RuntimeError("Sample data is disabled; policy/news text must come from a live source.")
+
+    rows = _collect_tushare_news(run_date)
+    if not rows:
+        raise RuntimeError(f"No live policy/news rows matched fixed-income keywords for {run_date}.")
+    return rows
 
 
-def _try_collect_tushare_news(run_date: str) -> list[dict[str, object]]:
+def _collect_tushare_news(run_date: str) -> list[dict[str, object]]:
     try:
         import tushare as ts  # type: ignore
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("Tushare is required for policy/news text.") from exc
 
     token = os.getenv("TUSHARE_TOKEN")
     if not token:
-        return []
+        raise RuntimeError("TUSHARE_TOKEN is required for policy/news text.")
 
     pro = ts.pro_api(token)
-    keywords = ("央行", "货币", "流动性", "资金", "利率", "债券", "国债", "地方政府债", "金融风险", "宏观")
     try:
-        df = pro.news(
-            src="cls",
-            start_date=f"{run_date} 00:00:00",
-            end_date=f"{run_date} 23:59:59",
-        )
-    except Exception:
-        return []
+        df = pro.news(src="cls", start_date=f"{run_date} 00:00:00", end_date=f"{run_date} 23:59:59")
+    except Exception as exc:
+        raise RuntimeError(f"Tushare news query failed for {run_date}.") from exc
 
-    if df.empty:
+    if df is None or df.empty:
         return []
 
     rows: list[dict[str, object]] = []
+    seen_titles: set[str] = set()
     for _, item in df.iterrows():
         title = str(item.get("title") or "").strip()
         content = str(item.get("content") or "").strip()
-        text = f"{title} {content}"
-        if not any(keyword in text for keyword in keywords):
+        if not title and not content:
             continue
+        text = f"{title} {content}"
+        if not _is_fixed_income_relevant(text):
+            continue
+        dedupe_key = title or content[:60]
+        if dedupe_key in seen_titles:
+            continue
+        seen_titles.add(dedupe_key)
         rows.append(
             {
                 "date": run_date,
                 "title": title or content[:40],
                 "source": "财联社",
                 "content": content,
-                "url": "",
-                "data_source": "tushare_news_cls",
+                "url": str(item.get("url") or ""),
+                "data_source": f"tushare_news_cls:{run_date}",
             }
         )
-        if len(rows) >= 8:
+        if len(rows) >= 12:
             break
     return rows
+
+
+def _is_fixed_income_relevant(text: str) -> bool:
+    lowered = text.lower()
+    has_core = any(term.lower() in lowered for term in CORE_RATE_TERMS)
+    has_macro = any(term.lower() in lowered for term in MACRO_RATE_TERMS)
+    has_noise = any(term.lower() in lowered for term in NOISE_TERMS)
+    has_anchor = any(term.lower() in lowered for term in GOVERNMENT_RATE_ANCHORS)
+    has_high_authority_anchor = any(term.lower() in lowered for term in HIGH_AUTHORITY_ANCHORS)
+
+    if has_noise and not has_high_authority_anchor:
+        return False
+    if has_core:
+        return True
+    return has_macro and any(term in text for term in ("人民银行", "财政部", "国家发改委", "银行间", "货币政策"))

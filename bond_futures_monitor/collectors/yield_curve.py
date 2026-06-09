@@ -7,51 +7,49 @@ from datetime import date as Date
 from datetime import timedelta
 
 
-def collect_bond_yields(run_date: str, use_live_data: bool = False) -> list[dict[str, object]]:
-    if use_live_data:
-        live_rows = _try_collect_tushare(run_date)
-        if live_rows:
-            return live_rows
-    return sample_bond_yields(run_date)
+REQUIRED_TENORS = {1.0: "1Y", 2.0: "2Y", 5.0: "5Y", 10.0: "10Y", 30.0: "30Y"}
 
 
-def sample_bond_yields(run_date: str) -> list[dict[str, object]]:
-    values = {
-        "1Y": 1.58,
-        "2Y": 1.69,
-        "5Y": 1.87,
-        "10Y": 2.02,
-        "30Y": 2.22,
-    }
-    return [
-        {"date": run_date, "tenor": tenor, "yield_value": value, "data_source": "sample_fallback"}
-        for tenor, value in values.items()
-    ]
+def collect_bond_yields(run_date: str, use_live_data: bool = True) -> list[dict[str, object]]:
+    """Collect real China government bond yield-curve data from Tushare."""
+
+    if not use_live_data:
+        raise RuntimeError("Sample data is disabled; bond yields must come from a live source.")
+
+    rows = _collect_tushare(run_date)
+    available = {row["tenor"] for row in rows}
+    required = set(REQUIRED_TENORS.values())
+    if available != required:
+        raise RuntimeError(
+            "Live yield-curve coverage is incomplete: "
+            f"expected {sorted(required)}, got {sorted(available) or 'none'} for {run_date}."
+        )
+    return rows
 
 
-def _try_collect_tushare(run_date: str) -> list[dict[str, object]]:
+def _collect_tushare(run_date: str) -> list[dict[str, object]]:
     try:
         import tushare as ts  # type: ignore
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("Tushare is required for China government bond yields.") from exc
 
     token = os.getenv("TUSHARE_TOKEN")
     if not token:
-        return []
+        raise RuntimeError("TUSHARE_TOKEN is required for China government bond yields.")
 
     pro = ts.pro_api(token)
     target = Date.fromisoformat(run_date)
-    terms = {1.0: "1Y", 2.0: "2Y", 5.0: "5Y", 10.0: "10Y", 30.0: "30Y"}
     for offset in range(0, 10):
         query_date = (target - timedelta(days=offset)).strftime("%Y%m%d")
         try:
             df = pro.yc_cb(ts_code="1001.CB", curve_type="0", trade_date=query_date)
-        except Exception:
-            return []
-        if df.empty:
+        except Exception as exc:
+            raise RuntimeError(f"Tushare yc_cb failed for {query_date}.") from exc
+        if df is None or df.empty:
             continue
+
         rows = []
-        for term, tenor in terms.items():
+        for term, tenor in REQUIRED_TENORS.items():
             matched = df[df["curve_term"].astype(float).round(4) == term]
             if not matched.empty:
                 rows.append(

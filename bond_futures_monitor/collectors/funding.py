@@ -1,4 +1,4 @@
-"""Funding-rate collector."""
+"""Money-market funding-rate collector."""
 
 from __future__ import annotations
 
@@ -6,37 +6,34 @@ import os
 from datetime import date as Date
 
 
-def collect_funding_rates(run_date: str, use_live_data: bool = False) -> list[dict[str, object]]:
-    if use_live_data:
-        live_rows = _try_collect_tushare(run_date)
-        if live_rows:
-            return live_rows
-    return sample_funding_rates(run_date)
+REQUIRED_RATE_NAMES = {"DR001", "DR007", "R007", "SHIBOR_ON", "SHIBOR_7D"}
 
 
-def sample_funding_rates(run_date: str) -> list[dict[str, object]]:
-    values = {
-        "DR001": 1.42,
-        "DR007": 1.63,
-        "R007": 1.78,
-        "SHIBOR_ON": 1.45,
-        "SHIBOR_7D": 1.67,
-    }
-    return [
-        {"date": run_date, "rate_name": name, "rate_value": value, "data_source": "sample_fallback"}
-        for name, value in values.items()
-    ]
+def collect_funding_rates(run_date: str, use_live_data: bool = True) -> list[dict[str, object]]:
+    """Collect real interbank funding-rate data from Tushare."""
+
+    if not use_live_data:
+        raise RuntimeError("Sample data is disabled; funding rates must come from a live source.")
+
+    rows = _collect_tushare(run_date)
+    available = {row["rate_name"] for row in rows}
+    if not REQUIRED_RATE_NAMES.issubset(available):
+        raise RuntimeError(
+            "Live funding-rate coverage is incomplete: "
+            f"expected at least {sorted(REQUIRED_RATE_NAMES)}, got {sorted(available) or 'none'} for {run_date}."
+        )
+    return rows
 
 
-def _try_collect_tushare(run_date: str) -> list[dict[str, object]]:
+def _collect_tushare(run_date: str) -> list[dict[str, object]]:
     try:
         import tushare as ts  # type: ignore
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("Tushare is required for funding rates.") from exc
 
     token = os.getenv("TUSHARE_TOKEN")
     if not token:
-        return []
+        raise RuntimeError("TUSHARE_TOKEN is required for funding rates.")
 
     trade_date = Date.fromisoformat(run_date).strftime("%Y%m%d")
     pro = ts.pro_api(token)
@@ -44,54 +41,52 @@ def _try_collect_tushare(run_date: str) -> list[dict[str, object]]:
 
     try:
         shibor = pro.shibor(date=trade_date)
-        if not shibor.empty:
-            first = shibor.iloc[0]
-            rows.extend(
-                [
-                    {
-                        "date": run_date,
-                        "rate_name": "SHIBOR_ON",
-                        "rate_value": float(first["on"]),
-                        "data_source": "tushare_shibor",
-                    },
-                    {
-                        "date": run_date,
-                        "rate_name": "SHIBOR_7D",
-                        "rate_value": float(first["1w"]),
-                        "data_source": "tushare_shibor",
-                    },
-                ]
-            )
-    except Exception:
-        pass
+    except Exception as exc:
+        raise RuntimeError(f"Tushare shibor failed for {trade_date}.") from exc
+    if shibor is not None and not shibor.empty:
+        first = shibor.iloc[0]
+        rows.extend(
+            [
+                {
+                    "date": run_date,
+                    "rate_name": "SHIBOR_ON",
+                    "rate_value": float(first["on"]),
+                    "data_source": f"tushare_shibor:{trade_date}",
+                },
+                {
+                    "date": run_date,
+                    "rate_name": "SHIBOR_7D",
+                    "rate_value": float(first["1w"]),
+                    "data_source": f"tushare_shibor:{trade_date}",
+                },
+            ]
+        )
 
     try:
         repo = pro.repo_daily(trade_date=trade_date)
-        if not repo.empty:
-            repo_code_map = [
-                ("DR001.IB", "DR001"),
-                ("DR007.IB", "DR007"),
-                ("R001.IB", "R001"),
-                ("R007.IB", "R007"),
-                ("206001.SH", "R001"),
-                ("206007.SH", "R007"),
-            ]
-            seen_rate_names = {str(row["rate_name"]) for row in rows}
-            for code, name in repo_code_map:
-                if name in seen_rate_names:
-                    continue
-                matched = repo[repo["ts_code"].astype(str) == code]
-                if not matched.empty:
-                    rows.append(
-                        {
-                            "date": run_date,
-                            "rate_name": name,
-                            "rate_value": float(matched.iloc[0]["weight"]),
-                            "data_source": "tushare_repo_daily",
-                        }
-                    )
-                    seen_rate_names.add(name)
-    except Exception:
-        pass
-
+    except Exception as exc:
+        raise RuntimeError(f"Tushare repo_daily failed for {trade_date}.") from exc
+    if repo is not None and not repo.empty:
+        repo_code_map = [
+            ("DR001.IB", "DR001"),
+            ("DR007.IB", "DR007"),
+            ("R007.IB", "R007"),
+            ("206007.SH", "R007"),
+        ]
+        seen = {str(row["rate_name"]) for row in rows}
+        for code, name in repo_code_map:
+            if name in seen:
+                continue
+            matched = repo[repo["ts_code"].astype(str) == code]
+            if matched.empty:
+                continue
+            rows.append(
+                {
+                    "date": run_date,
+                    "rate_name": name,
+                    "rate_value": float(matched.iloc[0]["weight"]),
+                    "data_source": f"tushare_repo_daily:{trade_date}",
+                }
+            )
+            seen.add(name)
     return rows

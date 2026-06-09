@@ -3,58 +3,47 @@
 from __future__ import annotations
 
 from datetime import date as Date
+from typing import Any
 
 
 CONTRACTS = ("TS", "TF", "T", "TL")
 
 
-def collect_futures_quotes(run_date: str, use_live_data: bool = False) -> list[dict[str, object]]:
-    """Collect futures quotes, falling back to deterministic sample data."""
+def collect_futures_quotes(run_date: str, use_live_data: bool = True) -> list[dict[str, object]]:
+    """Collect CFFEX Treasury futures quotes from real market-data sources."""
 
-    if use_live_data:
-        live_rows = _try_collect_akshare(run_date)
-        if live_rows:
-            return live_rows
-    return sample_futures_quotes(run_date)
+    if not use_live_data:
+        raise RuntimeError("Sample data is disabled; futures quotes must come from a live source.")
 
+    rows = _collect_cffex_daily(run_date)
+    if len({row["contract"] for row in rows}) == len(CONTRACTS):
+        return rows
 
-def sample_futures_quotes(run_date: str) -> list[dict[str, object]]:
-    base = {
-        "TS": (101.245, 0.0007, 18230, 52210),
-        "TF": (102.870, 0.0011, 36120, 80420),
-        "T": (104.355, 0.0016, 72880, 153400),
-        "TL": (108.640, 0.0022, 45890, 96710),
-    }
-    return [
-        {
-            "date": run_date,
-            "contract": contract,
-            "close_price": close,
-            "daily_return": daily_return,
-            "volume": volume,
-            "open_interest": open_interest,
-            "data_source": "sample_fallback",
-        }
-        for contract, (close, daily_return, volume, open_interest) in base.items()
-    ]
+    secondary_rows = _collect_sina_main(run_date)
+    if len({row["contract"] for row in secondary_rows}) == len(CONTRACTS):
+        return secondary_rows
+
+    available = sorted({row["contract"] for row in rows + secondary_rows})
+    raise RuntimeError(
+        "Live futures quote coverage is incomplete: "
+        f"expected {list(CONTRACTS)}, got {available or 'none'} for {run_date}."
+    )
 
 
-def _try_collect_akshare(run_date: str) -> list[dict[str, object]]:
-    """Collect CFFEX Treasury futures from AKShare."""
-
+def _collect_cffex_daily(run_date: str) -> list[dict[str, object]]:
     try:
         import akshare as ak  # type: ignore
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("AKShare is required for CFFEX futures quotes.") from exc
 
     trade_date = Date.fromisoformat(run_date).strftime("%Y%m%d")
     try:
         daily = ak.get_cffex_daily(date=trade_date)
     except Exception:
-        daily = None
+        return []
 
     if daily is None or daily.empty or "variety" not in daily.columns:
-        return _try_collect_sina_main(ak, run_date)
+        return []
 
     rows: list[dict[str, object]] = []
     for contract in CONTRACTS:
@@ -63,25 +52,30 @@ def _try_collect_akshare(run_date: str) -> list[dict[str, object]]:
             continue
         subset["volume"] = subset["volume"].astype(float)
         main = subset.sort_values("volume", ascending=False).iloc[0]
-        pre_settle = float(main.get("pre_settle") or 0)
-        close_price = float(main["close"])
-        daily_return = close_price / pre_settle - 1 if pre_settle else 0.0
-        rows.append(
-            {
-                "date": run_date,
-                "contract": contract,
-                "close_price": close_price,
-                "daily_return": daily_return,
-                "volume": float(main["volume"]),
-                "open_interest": float(main["open_interest"]),
-                "data_source": "akshare_cffex_daily",
-            }
-        )
+        rows.append(_cffex_row(run_date, contract, main, trade_date))
     return rows
 
 
-def _try_collect_sina_main(ak, run_date: str) -> list[dict[str, object]]:
-    """Collect main continuous Treasury futures from Sina via AKShare."""
+def _cffex_row(run_date: str, contract: str, row: Any, trade_date: str) -> dict[str, object]:
+    pre_settle = _as_float(row.get("pre_settle"))
+    close_price = _as_float(row["close"])
+    daily_return = close_price / pre_settle - 1 if pre_settle else 0.0
+    return {
+        "date": run_date,
+        "contract": contract,
+        "close_price": close_price,
+        "daily_return": daily_return,
+        "volume": _as_float(row["volume"]),
+        "open_interest": _as_float(row["open_interest"]),
+        "data_source": f"akshare_cffex_daily:{trade_date}",
+    }
+
+
+def _collect_sina_main(run_date: str) -> list[dict[str, object]]:
+    try:
+        import akshare as ak  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("AKShare is required for Sina continuous futures quotes.") from exc
 
     rows: list[dict[str, object]] = []
     symbol_map = {"TS": "TS0", "TF": "TF0", "T": "T0", "TL": "TL0"}
@@ -90,24 +84,29 @@ def _try_collect_sina_main(ak, run_date: str) -> list[dict[str, object]]:
             history = ak.futures_zh_daily_sina(symbol=symbol)
         except Exception:
             continue
-        if history.empty or "date" not in history.columns:
+        if history is None or history.empty or "date" not in history.columns:
             continue
         matched = history[history["date"].astype(str) == run_date]
         if matched.empty:
             continue
         row = matched.iloc[-1]
-        close_price = float(row["close"])
-        open_price = float(row["open"])
-        daily_return = close_price / open_price - 1 if open_price else 0.0
+        close_price = _as_float(row["close"])
+        open_price = _as_float(row["open"])
         rows.append(
             {
                 "date": run_date,
                 "contract": contract,
                 "close_price": close_price,
-                "daily_return": daily_return,
-                "volume": float(row["volume"]),
-                "open_interest": float(row["hold"]),
-                "data_source": "akshare_sina_main_daily",
+                "daily_return": close_price / open_price - 1 if open_price else 0.0,
+                "volume": _as_float(row["volume"]),
+                "open_interest": _as_float(row["hold"]),
+                "data_source": f"akshare_sina_main_daily:{symbol}",
             }
         )
     return rows
+
+
+def _as_float(value: object) -> float:
+    if value is None or value == "":
+        return 0.0
+    return float(value)

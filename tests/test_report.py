@@ -1,6 +1,76 @@
-from bond_futures_monitor.cli import run_daily_pipeline
-from bond_futures_monitor.database import connect, init_db
+from bond_futures_monitor.ai.text_signal import classify_news_item
+from bond_futures_monitor.database import (
+    connect,
+    init_db,
+    insert_ai_text_signal,
+    insert_bond_yields,
+    insert_funding_rates,
+    insert_futures_quotes,
+    insert_policy_news,
+    upsert_daily_features,
+    upsert_daily_market_signal,
+)
 from bond_futures_monitor.features.daily_features import build_daily_features
+from bond_futures_monitor.reports.daily_report import generate_daily_report
+from bond_futures_monitor.signals.rule_based import generate_market_signal
+from bond_futures_monitor.validation import validate_real_data_coverage
+
+
+RUN_DATE = "2026-06-08"
+
+
+def seed_real_source_rows(conn, run_date: str = RUN_DATE) -> None:
+    insert_futures_quotes(
+        conn,
+        [
+            {
+                "date": run_date,
+                "contract": contract,
+                "close_price": close,
+                "daily_return": ret,
+                "volume": volume,
+                "open_interest": oi,
+                "data_source": f"akshare_cffex_daily:{run_date.replace('-', '')}",
+            }
+            for contract, close, ret, volume, oi in [
+                ("TS", 101.0, 0.001, 1000, 2000),
+                ("TF", 102.0, 0.001, 1000, 2000),
+                ("T", 103.0, 0.001, 1000, 2000),
+                ("TL", 104.0, 0.001, 1000, 2000),
+            ]
+        ],
+    )
+    insert_bond_yields(
+        conn,
+        [
+            {"date": run_date, "tenor": tenor, "yield_value": value, "data_source": "tushare_yc_cb:20260608"}
+            for tenor, value in [("1Y", 1.4), ("2Y", 1.5), ("5Y", 1.7), ("10Y", 1.9), ("30Y", 2.2)]
+        ],
+    )
+    insert_funding_rates(
+        conn,
+        [
+            {"date": run_date, "rate_name": name, "rate_value": value, "data_source": "tushare_repo_daily:20260608"}
+            for name, value in [("DR001", 1.3), ("DR007", 1.5), ("R007", 1.7)]
+        ]
+        + [
+            {"date": run_date, "rate_name": "SHIBOR_ON", "rate_value": 1.31, "data_source": "tushare_shibor:20260608"},
+            {"date": run_date, "rate_name": "SHIBOR_7D", "rate_value": 1.55, "data_source": "tushare_shibor:20260608"},
+        ],
+    )
+    insert_policy_news(
+        conn,
+        [
+            {
+                "date": run_date,
+                "title": "央行公开市场净投放呵护流动性",
+                "source": "财联社",
+                "content": "资金利率回落，银行间流动性保持合理充裕。",
+                "url": "",
+                "data_source": "tushare_news_cls:2026-06-08",
+            }
+        ],
+    )
 
 
 def test_daily_report_generation(tmp_path):
@@ -8,18 +78,23 @@ def test_daily_report_generation(tmp_path):
     report_dir = tmp_path / "reports"
     with connect(db_path) as conn:
         init_db(conn)
-        run_daily_pipeline(conn, "2026-06-08", False, report_dir)
+        seed_real_source_rows(conn)
+        validate_real_data_coverage(conn, RUN_DATE)
+        for row in conn.execute("SELECT * FROM policy_news WHERE date = ?", (RUN_DATE,)).fetchall():
+            insert_ai_text_signal(conn, classify_news_item(dict(row)))
+        features = build_daily_features(conn, RUN_DATE)
+        upsert_daily_features(conn, features)
+        upsert_daily_market_signal(conn, generate_market_signal(features))
+        report_path = generate_daily_report(conn, RUN_DATE, report_dir)
 
-    report_path = report_dir / "2026-06-08_daily_report.md"
     content = report_path.read_text(encoding="utf-8")
     assert report_path.exists()
     assert "每日市场判断" in content
-    assert "评分拆解" in content
-    assert "特征面板" in content
-    assert "数据源与质量" in content
+    assert "数据真实性检查" in content
+    assert "当日真实数据合计" in content
     assert "国债期货概览" in content
-    assert "AI 政策与新闻解读" in content
-    assert "数据质量提示" in content
+    assert "政策与新闻结构化解读" in content
+    assert "sample" not in content.lower()
 
 
 def test_features_use_latest_ai_signal_per_news_item(tmp_path):
@@ -29,7 +104,7 @@ def test_features_use_latest_ai_signal_per_news_item(tmp_path):
         conn.execute(
             """
             INSERT INTO policy_news (id, date, title, source, content, url, data_source)
-            VALUES (1, '2026-06-08', 'test', 'source', 'content', NULL, 'tushare_news_cls')
+            VALUES (1, '2026-06-08', 'test', 'source', 'content', NULL, 'tushare_news_cls:2026-06-08')
             """
         )
         conn.execute(
@@ -38,8 +113,8 @@ def test_features_use_latest_ai_signal_per_news_item(tmp_path):
             (news_id, date, event_type, summary, bond_impact, affected_maturity,
              related_contracts, confidence, reasoning, model_name)
             VALUES
-            (1, '2026-06-08', 'other', 'old', 'bullish', 'unclear', '[]', 2, 'old', 'mock-rule-based-text-signal-v1'),
-            (1, '2026-06-08', 'other', 'new', 'bearish', 'unclear', '[]', 2, 'new', 'rule-based-text-signal-v2')
+            (1, '2026-06-08', 'other', 'old', 'bullish', 'unclear', '[]', 2, 'old', 'rule-based-text-signal-v2'),
+            (1, '2026-06-08', 'other', 'new', 'bearish', 'unclear', '[]', 2, 'new', 'rule-based-text-signal-v3')
             """
         )
         conn.commit()

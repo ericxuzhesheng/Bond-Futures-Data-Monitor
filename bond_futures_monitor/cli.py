@@ -22,7 +22,7 @@ from bond_futures_monitor.database import (
     insert_futures_quotes,
     insert_policy_news,
     log_run,
-    purge_sample_fallback_for_date,
+    purge_daily_data_for_date,
     purge_superseded_ai_signals_for_date,
     upsert_daily_features,
     upsert_daily_market_signal,
@@ -30,19 +30,20 @@ from bond_futures_monitor.database import (
 from bond_futures_monitor.features.daily_features import build_daily_features
 from bond_futures_monitor.reports.daily_report import generate_daily_report
 from bond_futures_monitor.signals.rule_based import generate_market_signal
+from bond_futures_monitor.validation import validate_real_data_coverage
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="China Treasury bond futures data monitor")
+    parser = argparse.ArgumentParser(description="China Treasury bond futures real-data monitor")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("init-db", help="Initialize the SQLite database")
 
-    run_parser = subparsers.add_parser("run", help="Run the full daily pipeline")
-    run_parser.add_argument("--date", default="today", help="Run date in YYYY-MM-DD format, or 'today' for Asia/Shanghai")
+    run_parser = subparsers.add_parser("run", help="Run the full daily real-data pipeline")
+    run_parser.add_argument("--date", default="today", help="Run date in YYYY-MM-DD format, or 'today'")
 
     report_parser = subparsers.add_parser("generate-report", help="Generate daily Markdown report")
-    report_parser.add_argument("--date", default="today", help="Report date in YYYY-MM-DD format, or 'today' for Asia/Shanghai")
+    report_parser.add_argument("--date", default="today", help="Report date in YYYY-MM-DD format, or 'today'")
 
     args = parser.parse_args(argv)
     settings = get_settings()
@@ -59,8 +60,8 @@ def main(argv: list[str] | None = None) -> int:
             init_db(conn)
             try:
                 run_daily_pipeline(conn, args.date, settings.use_live_data, settings.reports_output_dir)
-                log_run(conn, args.date, "success", "Daily pipeline completed")
-                print(f"每日监控流程已完成：{args.date}")
+                log_run(conn, args.date, "success", "Daily real-data pipeline completed")
+                print(f"每日真实数据监控流程已完成：{args.date}")
                 print(f"日报已生成：{settings.reports_output_dir / f'{args.date}_daily_report.md'}")
                 return 0
             except Exception as exc:
@@ -76,13 +77,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_daily_pipeline(conn, run_date: str, use_live_data: bool, reports_output_dir) -> None:
-    if use_live_data:
-        purge_sample_fallback_for_date(conn, run_date)
+    if not use_live_data:
+        raise RuntimeError("USE_LIVE_DATA=0 is not allowed because the assignment requires real data.")
+
+    purge_daily_data_for_date(conn, run_date)
 
     insert_futures_quotes(conn, collect_futures_quotes(run_date, use_live_data))
     insert_bond_yields(conn, collect_bond_yields(run_date, use_live_data))
     insert_funding_rates(conn, collect_funding_rates(run_date, use_live_data))
     insert_policy_news(conn, collect_policy_news(run_date, use_live_data))
+    validate_real_data_coverage(conn, run_date)
 
     for row in fetch_policy_news(conn, run_date):
         insert_ai_text_signal(conn, classify_news_item(dict(row)))

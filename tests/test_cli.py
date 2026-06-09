@@ -1,7 +1,7 @@
 """Tests for CLI helpers and config."""
 
 import pytest
-from bond_futures_monitor.cli import resolve_run_date
+from bond_futures_monitor.cli import resolve_run_date, run_daily_pipeline
 from bond_futures_monitor.config import get_settings
 
 
@@ -35,3 +35,8 @@ def test_config_database_path_default(monkeypatch):
     monkeypatch.delenv("DATABASE_PATH", raising=False)
     path = get_settings().database_path
     assert str(path).endswith("bond_futures_monitor.db")
+
+
+def test_run_daily_pipeline_rejects_disabled_live_data(tmp_path):
+    with pytest.raises(RuntimeError, match="requires real data"):
+        run_daily_pipeline(None, "2026-06-08", False, tmp_path)

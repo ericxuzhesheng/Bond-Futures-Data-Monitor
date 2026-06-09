@@ -176,9 +176,13 @@ def insert_policy_news(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]])
     return _insert_many(
         conn,
         """
-        INSERT OR IGNORE INTO policy_news
+        INSERT INTO policy_news
         (date, title, source, content, url, data_source)
         VALUES (:date, :title, :source, :content, :url, :data_source)
+        ON CONFLICT(date, title, source) DO UPDATE SET
+            content=excluded.content,
+            url=excluded.url,
+            data_source=excluded.data_source
         """,
         rows,
     )
@@ -265,22 +269,24 @@ def log_run(conn: sqlite3.Connection, run_date: str, status: str, message: str) 
     conn.commit()
 
 
-def purge_sample_fallback_for_date(conn: sqlite3.Connection, run_date: str) -> None:
-    """Remove sample fallback rows for a date before a live-data refresh."""
+def purge_daily_data_for_date(conn: sqlite3.Connection, run_date: str) -> None:
+    """Remove one run date before refreshing all raw and derived real-data rows."""
 
     conn.execute(
         """
         DELETE FROM ai_text_signals
         WHERE news_id IN (
-            SELECT id FROM policy_news WHERE date = ? AND data_source = 'sample_fallback'
+            SELECT id FROM policy_news WHERE date = ?
         )
         """,
         (run_date,),
     )
-    conn.execute("DELETE FROM policy_news WHERE date = ? AND data_source = 'sample_fallback'", (run_date,))
-    conn.execute("DELETE FROM futures_quotes WHERE date = ? AND data_source = 'sample_fallback'", (run_date,))
-    conn.execute("DELETE FROM bond_yields WHERE date = ? AND data_source = 'sample_fallback'", (run_date,))
-    conn.execute("DELETE FROM funding_rates WHERE date = ? AND data_source = 'sample_fallback'", (run_date,))
+    conn.execute("DELETE FROM daily_market_signals WHERE date = ?", (run_date,))
+    conn.execute("DELETE FROM daily_features WHERE date = ?", (run_date,))
+    conn.execute("DELETE FROM policy_news WHERE date = ?", (run_date,))
+    conn.execute("DELETE FROM futures_quotes WHERE date = ?", (run_date,))
+    conn.execute("DELETE FROM bond_yields WHERE date = ?", (run_date,))
+    conn.execute("DELETE FROM funding_rates WHERE date = ?", (run_date,))
     conn.commit()
 
 
