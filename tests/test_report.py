@@ -118,7 +118,9 @@ def test_daily_report_generation(tmp_path):
     assert report_path.exists()
     assert "每日市场判断" in content
     assert "数据真实性检查" in content
-    assert "公开市场操作" in content
+    assert "## 公开市场操作概览" in content
+    assert "公开市场操作利率" not in content
+    assert "| 类型 | 期限 | 投放 | 到期 | 净投放 | 来源标题 |" in content
     assert "当日真实数据合计" in content
     assert "国债期货概览" in content
     assert "政策与新闻结构化解读" in content

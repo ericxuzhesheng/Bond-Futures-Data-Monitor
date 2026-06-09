@@ -20,8 +20,9 @@ if ([string]::IsNullOrWhiteSpace($PythonPath)) {
 }
 
 $runner = Resolve-Path (Join-Path $RepoRoot "scripts\run_daily_local.ps1")
-$argument = "-NoProfile -ExecutionPolicy Bypass -File `"$runner`" -RepoRoot `"$RepoRoot`" -PythonPath `"$PythonPath`""
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argument -WorkingDirectory $RepoRoot
+$powershellPath = Join-Path $PSHOME "powershell.exe"
+$argument = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runner`" -RepoRoot `"$RepoRoot`" -PythonPath `"$PythonPath`""
+$action = New-ScheduledTaskAction -Execute $powershellPath -Argument $argument -WorkingDirectory $RepoRoot
 $trigger = New-ScheduledTaskTrigger -Daily -At ([datetime]::ParseExact($Time, "HH:mm", $null))
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet `

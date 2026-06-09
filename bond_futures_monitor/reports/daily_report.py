@@ -98,14 +98,14 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         [
             "",
             "## 公开市场操作概览",
-            "| 类型 | 期限 | 投放 | 到期 | 净投放 | 利率 | 来源标题 |",
-            "|---|---:|---:|---:|---:|---:|---|",
+            "| 类型 | 期限 | 投放 | 到期 | 净投放 | 来源标题 |",
+            "|---|---:|---:|---:|---:|---|",
         ]
     )
     lines.extend(
         f"| {_operation_type_label(row['operation_type'])} | {_format_tenor(row['tenor_days'])} | "
         f"{row['operation_amount']:.0f} 亿元 | {row['maturity_amount']:.0f} 亿元 | "
-        f"{row['net_injection_amount']:.0f} 亿元 | {_format_rate(row['operation_rate'])} | {row['source_title']} |"
+        f"{row['net_injection_amount']:.0f} 亿元 | {row['source_title']} |"
         for row in omo
     )
 
@@ -241,12 +241,6 @@ def _format_tenor(value) -> str:
     return f"{int(value)} 天"
 
 
-def _format_rate(value) -> str:
-    if value is None:
-        return "缺失"
-    return f"{float(value):.2f}%"
-
-
 def _feature_panel_rows(feature_groups: dict) -> list[str]:
     labels = {
         "yield_10y_change": "10Y 收益率变化",
@@ -256,7 +250,6 @@ def _feature_panel_rows(feature_groups: dict) -> list[str]:
         "dr007_change": "DR007 变化",
         "available_rates": "可用资金利率",
         "omo_net_injection_amount": "公开市场净投放",
-        "omo_operation_rate": "公开市场操作利率",
         "operation_count": "公开市场操作记录数",
         "avg_futures_return": "期货平均日收益率",
         "avg_volume_change": "成交活跃度变化",
