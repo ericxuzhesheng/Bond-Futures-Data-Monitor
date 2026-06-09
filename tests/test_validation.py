@@ -33,3 +33,13 @@ def test_validate_real_data_coverage_rejects_missing_required_rows(tmp_path):
         conn.commit()
         with pytest.raises(RuntimeError, match="funding_rates"):
             validate_real_data_coverage(conn, RUN_DATE)
+
+
+def test_validate_real_data_coverage_rejects_missing_omo_rows(tmp_path):
+    with connect(tmp_path / "monitor.db") as conn:
+        init_db(conn)
+        seed_real_source_rows(conn)
+        conn.execute("DELETE FROM open_market_operations WHERE date = ?", (RUN_DATE,))
+        conn.commit()
+        with pytest.raises(RuntimeError, match="open_market_operations"):
+            validate_real_data_coverage(conn, RUN_DATE)

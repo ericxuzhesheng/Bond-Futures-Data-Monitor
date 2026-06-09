@@ -6,7 +6,9 @@ from bond_futures_monitor.database import (
     insert_bond_yields,
     insert_funding_rates,
     insert_futures_quotes,
+    insert_open_market_operations,
     insert_policy_news,
+    log_run,
     upsert_daily_features,
     upsert_daily_market_signal,
 )
@@ -58,6 +60,22 @@ def seed_real_source_rows(conn, run_date: str = RUN_DATE) -> None:
             {"date": run_date, "rate_name": "SHIBOR_7D", "rate_value": 1.55, "data_source": "tushare_shibor:20260608"},
         ],
     )
+    insert_open_market_operations(
+        conn,
+        [
+            {
+                "date": run_date,
+                "operation_type": "reverse_repo",
+                "tenor_days": 7,
+                "operation_amount": 100.0,
+                "maturity_amount": 50.0,
+                "net_injection_amount": 50.0,
+                "operation_rate": 1.4,
+                "source_title": "央行开展100亿元7天期逆回购操作",
+                "data_source": f"tushare_news_cls:{run_date}",
+            }
+        ],
+    )
     insert_policy_news(
         conn,
         [
@@ -68,7 +86,15 @@ def seed_real_source_rows(conn, run_date: str = RUN_DATE) -> None:
                 "content": "资金利率回落，银行间流动性保持合理充裕。",
                 "url": "",
                 "data_source": "tushare_news_cls:2026-06-08",
-            }
+            },
+            {
+                "date": run_date,
+                "title": "财政部安排超长期特别国债资金支持城市更新",
+                "source": "财联社",
+                "content": "超长期特别国债资金将加力支持公共安全和民生保障类工程。",
+                "url": "",
+                "data_source": "tushare_news_cls:2026-06-08",
+            },
         ],
     )
 
@@ -85,15 +111,24 @@ def test_daily_report_generation(tmp_path):
         features = build_daily_features(conn, RUN_DATE)
         upsert_daily_features(conn, features)
         upsert_daily_market_signal(conn, generate_market_signal(features))
+        log_run(conn, RUN_DATE, "success", "Daily real-data pipeline completed")
         report_path = generate_daily_report(conn, RUN_DATE, report_dir)
 
     content = report_path.read_text(encoding="utf-8")
     assert report_path.exists()
     assert "每日市场判断" in content
     assert "数据真实性检查" in content
+    assert "公开市场操作" in content
     assert "当日真实数据合计" in content
     assert "国债期货概览" in content
     assert "政策与新闻结构化解读" in content
+    assert "原始标题：央行公开市场净投放呵护流动性" in content
+    assert "原始标题：财政部安排超长期特别国债资金支持城市更新" in content
+    assert "数据库写入结果" in content
+    assert "open_market_operations: 1 rows" in content
+    assert "run_status: success" in content
+    for category in ["利率方向", "曲线形态", "资金面", "公开市场操作", "期货量价", "文本信号"]:
+        assert f"| {category} |" in content
     assert "sample" not in content.lower()
 
 
@@ -113,8 +148,8 @@ def test_features_use_latest_ai_signal_per_news_item(tmp_path):
             (news_id, date, event_type, summary, bond_impact, affected_maturity,
              related_contracts, confidence, reasoning, model_name)
             VALUES
-            (1, '2026-06-08', 'other', 'old', 'bullish', 'unclear', '[]', 2, 'old', 'rule-based-text-signal-v2'),
-            (1, '2026-06-08', 'other', 'new', 'bearish', 'unclear', '[]', 2, 'new', 'rule-based-text-signal-v3')
+            (1, '2026-06-08', 'other', 'old', 'bullish', 'unclear', '[]', 2, 'old', 'rule-based-text-signal-v3'),
+            (1, '2026-06-08', 'other', 'new', 'bearish', 'unclear', '[]', 2, 'new', 'rule-based-text-signal-v4')
             """
         )
         conn.commit()

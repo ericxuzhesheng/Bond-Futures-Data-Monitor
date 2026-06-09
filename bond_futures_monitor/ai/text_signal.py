@@ -4,20 +4,23 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from bond_futures_monitor.ai.schema import AFFECTED_MATURITIES, BOND_IMPACTS, CONTRACTS, EVENT_TYPES
 
 
-_RULE_MODEL = "rule-based-text-signal-v3"
+_RULE_MODEL = "rule-based-text-signal-v4"
 _LLM_MODEL = "claude-haiku-4-5-20251001"
 
 
 def classify_news_item(news: dict[str, Any]) -> dict[str, Any]:
     """Convert one real news item into a structured fixed-income signal."""
 
-    text = f"{news.get('title', '')} {news.get('content', '')}"
-    result = _classify_with_llm(text) or _classify_with_rules(text)
+    title = str(news.get("title", "")).strip()
+    content = str(news.get("content", "")).strip()
+    text = f"{title} {content}"
+    result = _classify_with_llm(text) or _classify_with_rules(title, content)
     result["news_id"] = news.get("id")
     result["date"] = news["date"]
     validate_signal(result)
@@ -64,7 +67,7 @@ def _classify_with_llm(text: str) -> dict[str, Any] | None:
 字段要求：
 {{
   "event_type": "{all_event_types}之一",
-  "summary": "不超过50字的中文摘要",
+  "summary": "不超过50字的中文摘要，必须体现原文具体事件",
   "bond_impact": "bullish|bearish|neutral",
   "affected_maturity": "short_end|belly|long_end|full_curve|unclear",
   "related_contracts": ["TS","TF","T","TL"] 中受影响的合约,
@@ -98,72 +101,79 @@ def _classify_with_llm(text: str) -> dict[str, Any] | None:
     return result
 
 
-def _classify_with_rules(text: str) -> dict[str, Any]:
-    t = text.lower()
+def _classify_with_rules(title: str, content: str) -> dict[str, Any]:
+    text = f"{title} {content}".lower()
+    event = _clean_title(title or content[:60])
 
-    if _has(t, "降准", "降息", "净投放", "呵护流动性", "超额续作", "easing", "rate cut"):
+    if _has(text, "净投放", "降准", "降息", "呵护流动性", "超额续作", "easing", "rate cut"):
         return _sig(
             "monetary_policy",
             "bullish",
             "full_curve",
             ["TS", "TF", "T", "TL"],
             4,
-            "货币政策或流动性边际偏宽",
-            "宽松信号降低无风险利率预期，支撑国债期货价格。",
+            f"{event}，货币或流动性信号偏宽",
+            f"{event}指向流动性边际改善，压低资金和利率预期，对国债期货偏多。",
         )
-    if _has(t, "加息", "回笼", "净回笼", "收紧", "缩表", "tighten", "rate hike", "drain"):
+    if _has(text, "净回笼", "加息", "回笼", "收紧", "缩表", "tighten", "rate hike", "drain"):
         return _sig(
             "monetary_policy",
             "bearish",
             "full_curve",
             ["TS", "TF", "T", "TL"],
             4,
-            "货币政策或流动性边际收紧",
-            "资金回笼推升利率预期，国债期货承压。",
+            f"{event}，货币或流动性信号偏紧",
+            f"{event}可能推高资金利率或收紧预期，国债期货面临压力。",
         )
-    if _has(t, "dr007", "shibor", "资金利率", "银行间", "流动性", "repo", "funding"):
+    if _has(text, "公开市场", "逆回购", "dr007", "shibor", "资金利率", "银行间", "流动性", "repo", "funding"):
         return _sig(
             "funding_liquidity",
             "neutral",
             "full_curve",
             ["TS", "TF", "T", "TL"],
             3,
-            "资金面相关信息需要结合利率方向判断",
-            "资金价格影响持仓成本，方向取决于利率上行或下行。",
+            f"{event}，资金面信息需结合价格变化判断",
+            f"{event}影响持仓成本和短端预期，方向取决于净投放规模与资金利率表现。",
         )
-    if _has(t, "地方债", "专项债", "国债发行", "特别国债", "债券供给", "发行规模", "supply", "issuance"):
-        impact = "bearish" if _has(t, "增加", "扩大", "放量", "上升", "提速", "increase", "large") else "neutral"
+    if _has(text, "地方债", "专项债", "国债发行", "特别国债", "债券供给", "发行规模", "supply", "issuance"):
+        impact = "bearish" if _has(text, "增加", "扩大", "放量", "上升", "提速", "安排", "支持", "increase", "large") else "neutral"
         return _sig(
             "bond_supply",
             impact,
             "long_end",
             ["T", "TL"],
             4 if impact == "bearish" else 3,
-            "债券供给信息影响长端利率",
-            "供给增加会提高长端吸收压力，长端国债期货更敏感。",
+            f"{event}，债券供给关注度上升",
+            f"{event}会影响长端供需和期限溢价，T、TL 对此更敏感。",
         )
-    if _has(t, "cpi", "ppi", "通胀", "物价", "inflation", "deflation"):
-        if _has(t, "上升", "反弹", "高于", "超预期", "rise", "higher"):
-            return _sig("inflation", "bearish", "full_curve", ["TF", "T", "TL"], 3, "通胀压力上升", "通胀抬升压缩宽松空间，利率债偏空。")
-        if _has(t, "回落", "低于", "走弱", "通缩", "below", "weak", "lower"):
-            return _sig("inflation", "bullish", "full_curve", ["TF", "T", "TL"], 3, "通胀压力回落", "通胀走弱提高宽松预期，利率债偏多。")
-    if _has(t, "gdp", "pmi", "社融", "信贷", "经济", "制造业", "增长", "growth", "economy", "credit"):
-        if _has(t, "超预期", "改善", "回升", "加快", "strong", "beat", "recover"):
-            return _sig("macro_growth", "bearish", "long_end", ["T", "TL"], 3, "增长数据偏强", "经济修复削弱宽松必要性，长端收益率有上行压力。")
-        if _has(t, "低于预期", "走弱", "放缓", "下滑", "weak", "miss", "slow"):
-            return _sig("macro_growth", "bullish", "long_end", ["T", "TL"], 3, "增长数据偏弱", "基本面走弱提升宽松预期，支撑长端国债期货。")
-    if _has(t, "财政", "赤字", "预算", "财政刺激", "fiscal", "deficit", "stimulus"):
-        return _sig("fiscal_policy", "bearish", "long_end", ["T", "TL"], 3, "财政扩张相关信息", "财政扩张通常伴随债券供给压力，长端期货偏空。")
-    if _has(t, "美联储", "美债", "fed", "us treasury", "海外利率", "global rate"):
-        return _sig("overseas_rates", "neutral", "long_end", ["T", "TL"], 2, "海外利率扰动", "海外利率通过全球期限溢价影响国内长端。")
-    if _has(t, "避险", "股市下跌", "风险偏好", "risk-off", "risk appetite", "safe haven"):
-        return _sig("risk_sentiment", "bullish", "long_end", ["T", "TL"], 3, "风险偏好变化", "避险情绪提升会增加利率债配置需求。")
+    if _has(text, "cpi", "ppi", "通胀", "物价", "inflation", "deflation"):
+        if _has(text, "上升", "反弹", "高于", "超预期", "rise", "higher"):
+            return _sig("inflation", "bearish", "full_curve", ["TF", "T", "TL"], 3, f"{event}，通胀压力上升", f"{event}压缩宽松空间，利率债偏空。")
+        if _has(text, "回落", "低于", "走弱", "通缩", "below", "weak", "lower"):
+            return _sig("inflation", "bullish", "full_curve", ["TF", "T", "TL"], 3, f"{event}，通胀压力回落", f"{event}提高宽松预期，利率债偏多。")
+    if _has(text, "gdp", "pmi", "社融", "信贷", "经济", "制造业", "增长", "growth", "economy", "credit"):
+        if _has(text, "超预期", "改善", "回升", "加快", "strong", "beat", "recover"):
+            return _sig("macro_growth", "bearish", "long_end", ["T", "TL"], 3, f"{event}，增长数据偏强", f"{event}削弱宽松必要性，长端收益率有上行压力。")
+        if _has(text, "低于预期", "走弱", "放缓", "下滑", "weak", "miss", "slow"):
+            return _sig("macro_growth", "bullish", "long_end", ["T", "TL"], 3, f"{event}，增长数据偏弱", f"{event}提升宽松预期，支撑长端国债期货。")
+    if _has(text, "财政", "赤字", "预算", "财政刺激", "fiscal", "deficit", "stimulus"):
+        return _sig("fiscal_policy", "bearish", "long_end", ["T", "TL"], 3, f"{event}，财政扩张相关信息", f"{event}可能带来债券供给或增长预期扰动，长端期货更敏感。")
+    if _has(text, "美联储", "美债", "fed", "us treasury", "海外利率", "global rate"):
+        return _sig("overseas_rates", "neutral", "long_end", ["T", "TL"], 2, f"{event}，海外利率扰动", f"{event}通过全球期限溢价影响国内长端，需要结合国内资金面确认。")
+    if _has(text, "避险", "股市下跌", "风险偏好", "risk-off", "risk appetite", "safe haven"):
+        return _sig("risk_sentiment", "bullish", "long_end", ["T", "TL"], 3, f"{event}，风险偏好变化", f"{event}若引发避险需求，可能支撑利率债配置。")
 
-    return _sig("other", "neutral", "unclear", [], 2, "文本未给出明确利率债方向", "传导链条不清晰，暂不形成方向性判断。")
+    return _sig("other", "neutral", "unclear", [], 2, f"{event}，未形成明确利率债方向", f"{event}的利率传导链条不清晰，暂归为中性背景信息。")
 
 
 def _has(text: str, *keywords: str) -> bool:
     return any(keyword.lower() in text for keyword in keywords)
+
+
+def _clean_title(value: str) -> str:
+    text = re.sub(r"【|】", "", value).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text[:48] or "该新闻"
 
 
 def _sig(

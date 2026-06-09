@@ -11,7 +11,7 @@ REQUIRED_RATE_NAMES = {"DR001", "DR007", "R007", "SHIBOR_ON", "SHIBOR_7D"}
 
 
 def validate_real_data_coverage(conn: sqlite3.Connection, run_date: str) -> None:
-    """Fail fast when the daily run does not satisfy the teacher's real-data requirement."""
+    """Fail fast when the daily run does not satisfy real-data coverage requirements."""
 
     _assert_no_sample_sources(conn, run_date)
     checks = [
@@ -19,13 +19,20 @@ def validate_real_data_coverage(conn: sqlite3.Connection, run_date: str) -> None
         _coverage_check(conn, "bond_yields", "tenor", run_date, REQUIRED_TENORS),
         _coverage_check(conn, "funding_rates", "rate_name", run_date, REQUIRED_RATE_NAMES),
     ]
+    omo_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM open_market_operations WHERE date = ?",
+        (run_date,),
+    ).fetchone()["n"]
+    if omo_count < 1:
+        checks.append("open_market_operations: expected at least 1 parsed OMO row, got 0")
+
     news_count = conn.execute("SELECT COUNT(*) AS n FROM policy_news WHERE date = ?", (run_date,)).fetchone()["n"]
     if news_count < 1:
         checks.append("policy_news: expected at least 1 fixed-income policy/news item, got 0")
 
     total_rows = sum(
         conn.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE date = ?", (run_date,)).fetchone()["n"]
-        for table in ("futures_quotes", "bond_yields", "funding_rates", "policy_news")
+        for table in ("futures_quotes", "bond_yields", "funding_rates", "open_market_operations", "policy_news")
     )
     if total_rows < 5:
         checks.append(f"daily data rows: expected at least 5 real rows, got {total_rows}")
@@ -51,7 +58,7 @@ def _coverage_check(
 
 
 def _assert_no_sample_sources(conn: sqlite3.Connection, run_date: str) -> None:
-    tables = ("futures_quotes", "bond_yields", "funding_rates", "policy_news")
+    tables = ("futures_quotes", "bond_yields", "funding_rates", "open_market_operations", "policy_news")
     sample_hits = []
     for table in tables:
         rows = conn.execute(

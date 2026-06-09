@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from bond_futures_monitor.ai.text_signal import classify_news_item
 from bond_futures_monitor.collectors.funding import collect_funding_rates
 from bond_futures_monitor.collectors.futures import collect_futures_quotes
+from bond_futures_monitor.collectors.open_market import collect_open_market_operations
 from bond_futures_monitor.collectors.policy_news import collect_policy_news
 from bond_futures_monitor.collectors.yield_curve import collect_bond_yields
 from bond_futures_monitor.config import get_settings
@@ -20,6 +21,7 @@ from bond_futures_monitor.database import (
     insert_bond_yields,
     insert_funding_rates,
     insert_futures_quotes,
+    insert_open_market_operations,
     insert_policy_news,
     log_run,
     purge_daily_data_for_date,
@@ -61,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 run_daily_pipeline(conn, args.date, settings.use_live_data, settings.reports_output_dir)
                 log_run(conn, args.date, "success", "Daily real-data pipeline completed")
+                generate_daily_report(conn, args.date, settings.reports_output_dir)
                 print(f"每日真实数据监控流程已完成：{args.date}")
                 print(f"日报已生成：{settings.reports_output_dir / f'{args.date}_daily_report.md'}")
                 return 0
@@ -78,13 +81,14 @@ def main(argv: list[str] | None = None) -> int:
 
 def run_daily_pipeline(conn, run_date: str, use_live_data: bool, reports_output_dir) -> None:
     if not use_live_data:
-        raise RuntimeError("USE_LIVE_DATA=0 is not allowed because the assignment requires real data.")
+        raise RuntimeError("USE_LIVE_DATA=0 is not allowed because production output requires real data.")
 
     purge_daily_data_for_date(conn, run_date)
 
     insert_futures_quotes(conn, collect_futures_quotes(run_date, use_live_data))
     insert_bond_yields(conn, collect_bond_yields(run_date, use_live_data))
     insert_funding_rates(conn, collect_funding_rates(run_date, use_live_data))
+    insert_open_market_operations(conn, collect_open_market_operations(run_date, use_live_data))
     insert_policy_news(conn, collect_policy_news(run_date, use_live_data))
     validate_real_data_coverage(conn, run_date)
 
@@ -97,8 +101,6 @@ def run_daily_pipeline(conn, run_date: str, use_live_data: bool, reports_output_
 
     signal = generate_market_signal(features)
     upsert_daily_market_signal(conn, signal)
-
-    generate_daily_report(conn, run_date, reports_output_dir)
 
 
 def resolve_run_date(value: str) -> str:

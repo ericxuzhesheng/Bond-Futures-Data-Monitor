@@ -13,11 +13,17 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     futures = conn.execute("SELECT * FROM futures_quotes WHERE date = ? ORDER BY contract", (run_date,)).fetchall()
     yields = conn.execute("SELECT * FROM bond_yields WHERE date = ? ORDER BY tenor", (run_date,)).fetchall()
     funding = conn.execute("SELECT * FROM funding_rates WHERE date = ? ORDER BY rate_name", (run_date,)).fetchall()
+    omo = conn.execute(
+        "SELECT * FROM open_market_operations WHERE date = ? ORDER BY operation_type, tenor_days",
+        (run_date,),
+    ).fetchall()
     news = conn.execute("SELECT * FROM policy_news WHERE date = ? ORDER BY id", (run_date,)).fetchall()
     ai = conn.execute(
         """
-        SELECT signal.*
+        SELECT signal.*, news.title AS news_title, news.source AS news_source
         FROM ai_text_signals AS signal
+        JOIN policy_news AS news
+          ON news.id = signal.news_id
         JOIN (
             SELECT news_id, MAX(id) AS latest_id
             FROM ai_text_signals
@@ -41,7 +47,9 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     feature_details = feature_snapshot.get("details", {})
     feature_groups = feature_details.get("feature_groups", {})
     data_sources = feature_details.get("data_sources", {})
+    db_status = _database_write_status(conn, run_date)
 
+    raw_count = len(futures) + len(yields) + len(funding) + len(omo) + len(news)
     lines = [
         f"# 中国国债期货每日真实数据监控报告 - {run_date}",
         "",
@@ -53,18 +61,19 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         f"- 国债期货合约：{len(futures)} 条",
         f"- 国债收益率期限：{len(yields)} 条",
         f"- 资金利率：{len(funding)} 条",
+        f"- 公开市场操作：{len(omo)} 条",
         f"- 政策/新闻文本：{len(news)} 条",
-        f"- 当日真实数据合计：{len(futures) + len(yields) + len(funding) + len(news)} 条",
+        f"- 当日真实数据合计：{raw_count} 条",
         "- 生产流程禁止非真实数据；覆盖不足会直接失败。",
         "",
         "## 评分拆解",
         "| 维度 | 分数 | 判断依据 |",
         "|---|---:|---|",
     ]
-    if score_items:
-        lines.extend(f"| {item['category']} | {float(item['score']):.2f} | {item['reason']} |" for item in score_items)
-    else:
-        lines.append("| 无 | 0.00 | 当日没有触发明确方向规则。 |")
+    lines.extend(
+        f"| {item['category']} | {float(item['score']):.2f} | {item['reason']} |"
+        for item in score_items
+    )
 
     lines.extend(["", "## 特征面板", "| 分组 | 指标 | 数值 |", "|---|---|---:|"])
     lines.extend(_feature_panel_rows(feature_groups))
@@ -85,6 +94,21 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     lines.extend(["", "## 资金面概览", "| 指标 | 利率 |", "|---|---:|"])
     lines.extend(f"| {row['rate_name']} | {row['rate_value']:.3f}% |" for row in funding)
 
+    lines.extend(
+        [
+            "",
+            "## 公开市场操作概览",
+            "| 类型 | 期限 | 投放 | 到期 | 净投放 | 利率 | 来源标题 |",
+            "|---|---:|---:|---:|---:|---:|---|",
+        ]
+    )
+    lines.extend(
+        f"| {_operation_type_label(row['operation_type'])} | {_format_tenor(row['tenor_days'])} | "
+        f"{row['operation_amount']:.0f} 亿元 | {row['maturity_amount']:.0f} 亿元 | "
+        f"{row['net_injection_amount']:.0f} 亿元 | {_format_rate(row['operation_rate'])} | {row['source_title']} |"
+        for row in omo
+    )
+
     directional_ai = [
         row
         for row in ai
@@ -101,6 +125,8 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         lines.extend(
             [
                 f"### {_event_type_label(row['event_type'])}",
+                f"- 原始标题：{row['news_title']}",
+                f"- 事件分类：{_event_type_label(row['event_type'])}",
                 f"- 摘要：{row['summary']}",
                 f"- 债券影响：**{_impact_label(row['bond_impact'])}**",
                 f"- 影响期限：{_maturity_label(row['affected_maturity'])}",
@@ -118,6 +144,18 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     lines.extend(
         [
             "",
+            "## 数据库写入结果",
+            f"- database: {db_status['database']}",
+            f"- futures_quotes: {db_status['futures_quotes']} rows",
+            f"- bond_yields: {db_status['bond_yields']} rows",
+            f"- funding_rates: {db_status['funding_rates']} rows",
+            f"- open_market_operations: {db_status['open_market_operations']} rows",
+            f"- policy_news: {db_status['policy_news']} rows",
+            f"- ai_text_signals: {db_status['ai_text_signals']} rows",
+            f"- daily_features: {db_status['daily_features']} row",
+            f"- daily_market_signals: {db_status['daily_market_signals']} row",
+            f"- run_status: {db_status['run_status']}",
+            "",
             "## 方法说明",
             "文本层用于把真实政策/新闻转成固定 schema 的利率债研究信号；规则评分用于解释当日数据含义，不直接预测价格。",
             "",
@@ -127,6 +165,35 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     path = output_dir / f"{run_date}_daily_report.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
+
+
+def _database_write_status(conn: sqlite3.Connection, run_date: str) -> dict[str, object]:
+    db_row = conn.execute("PRAGMA database_list").fetchone()
+    db_path = db_row["file"] if db_row and db_row["file"] else "data/bond_futures_monitor.db"
+    try:
+        db_path = str(Path(db_path).resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        db_path = str(db_path)
+    db_path = db_path.replace("\\", "/")
+    tables = [
+        "futures_quotes",
+        "bond_yields",
+        "funding_rates",
+        "open_market_operations",
+        "policy_news",
+        "ai_text_signals",
+        "daily_features",
+        "daily_market_signals",
+    ]
+    result: dict[str, object] = {"database": db_path}
+    for table in tables:
+        result[table] = conn.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE date = ?", (run_date,)).fetchone()["n"]
+    run_log = conn.execute(
+        "SELECT status FROM run_log WHERE run_date = ? ORDER BY id DESC LIMIT 1",
+        (run_date,),
+    ).fetchone()
+    result["run_status"] = run_log["status"] if run_log else "unknown"
+    return result
 
 
 def _market_view_label(value: str) -> str:
@@ -161,6 +228,25 @@ def _event_type_label(value: str) -> str:
     }.get(value, value)
 
 
+def _operation_type_label(value: str) -> str:
+    return {
+        "reverse_repo": "逆回购",
+        "outright_reverse_repo": "买断式逆回购",
+    }.get(value, value)
+
+
+def _format_tenor(value) -> str:
+    if value is None:
+        return "缺失"
+    return f"{int(value)} 天"
+
+
+def _format_rate(value) -> str:
+    if value is None:
+        return "缺失"
+    return f"{float(value):.2f}%"
+
+
 def _feature_panel_rows(feature_groups: dict) -> list[str]:
     labels = {
         "yield_10y_change": "10Y 收益率变化",
@@ -169,13 +255,22 @@ def _feature_panel_rows(feature_groups: dict) -> list[str]:
         "spread_30y_10y": "30Y-10Y 利差",
         "dr007_change": "DR007 变化",
         "available_rates": "可用资金利率",
+        "omo_net_injection_amount": "公开市场净投放",
+        "omo_operation_rate": "公开市场操作利率",
+        "operation_count": "公开市场操作记录数",
         "avg_futures_return": "期货平均日收益率",
         "avg_volume_change": "成交活跃度变化",
         "contract_count": "覆盖合约数量",
         "avg_ai_sentiment_score": "文本情绪均值",
         "signal_count": "文本信号数量",
     }
-    group_labels = {"rates": "利率", "funding": "资金面", "futures": "期货量价", "text": "文本"}
+    group_labels = {
+        "rates": "利率",
+        "funding": "资金面",
+        "open_market_operations": "公开市场操作",
+        "futures": "期货量价",
+        "text": "文本",
+    }
     rows: list[str] = []
     for group, values in feature_groups.items():
         if not isinstance(values, dict):
@@ -190,6 +285,7 @@ def _data_source_rows(data_sources: dict) -> list[str]:
         "futures": "国债期货",
         "yield_curve": "收益率曲线",
         "funding": "资金利率",
+        "open_market_operations": "公开市场操作",
         "policy_news": "政策/新闻",
     }
     rows = []

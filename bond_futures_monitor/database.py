@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +36,19 @@ CREATE TABLE IF NOT EXISTS funding_rates (
     rate_value REAL NOT NULL,
     data_source TEXT NOT NULL,
     PRIMARY KEY (date, rate_name)
+);
+
+CREATE TABLE IF NOT EXISTS open_market_operations (
+    date TEXT NOT NULL,
+    operation_type TEXT NOT NULL,
+    tenor_days INTEGER,
+    operation_amount REAL NOT NULL,
+    maturity_amount REAL NOT NULL,
+    net_injection_amount REAL NOT NULL,
+    operation_rate REAL,
+    source_title TEXT NOT NULL,
+    data_source TEXT NOT NULL,
+    PRIMARY KEY (date, operation_type, tenor_days, source_title)
 );
 
 CREATE TABLE IF NOT EXISTS policy_news (
@@ -72,6 +85,8 @@ CREATE TABLE IF NOT EXISTS daily_features (
     spread_10y_2y REAL,
     spread_30y_10y REAL,
     dr007_change REAL,
+    omo_net_injection_amount REAL,
+    omo_operation_rate REAL,
     avg_futures_return REAL,
     avg_volume_change REAL,
     avg_ai_sentiment_score REAL,
@@ -112,6 +127,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     """Initialize all database tables."""
 
     conn.executescript(SCHEMA)
+    _ensure_column(conn, "daily_features", "omo_net_injection_amount", "REAL")
+    _ensure_column(conn, "daily_features", "omo_operation_rate", "REAL")
     conn.commit()
 
 
@@ -172,6 +189,31 @@ def insert_funding_rates(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]
     )
 
 
+def insert_open_market_operations(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
+    return _insert_many(
+        conn,
+        """
+        INSERT INTO open_market_operations
+        (date, operation_type, tenor_days, operation_amount, maturity_amount,
+         net_injection_amount, operation_rate, source_title, data_source)
+        VALUES (:date, :operation_type, :tenor_days, :operation_amount, :maturity_amount,
+                :net_injection_amount, :operation_rate, :source_title, :data_source)
+        ON CONFLICT(date, operation_type, tenor_days, source_title) DO UPDATE SET
+            operation_amount=excluded.operation_amount,
+            maturity_amount=excluded.maturity_amount,
+            net_injection_amount=excluded.net_injection_amount,
+            operation_rate=excluded.operation_rate,
+            data_source=excluded.data_source
+        WHERE open_market_operations.operation_amount IS NOT excluded.operation_amount
+           OR open_market_operations.maturity_amount IS NOT excluded.maturity_amount
+           OR open_market_operations.net_injection_amount IS NOT excluded.net_injection_amount
+           OR open_market_operations.operation_rate IS NOT excluded.operation_rate
+           OR open_market_operations.data_source IS NOT excluded.data_source
+        """,
+        rows,
+    )
+
+
 def insert_policy_news(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
     return _insert_many(
         conn,
@@ -220,15 +262,19 @@ def upsert_daily_features(conn: sqlite3.Connection, features: dict[str, Any]) ->
         """
         INSERT INTO daily_features
         (date, yield_10y_change, yield_30y_change, spread_10y_2y, spread_30y_10y,
-         dr007_change, avg_futures_return, avg_volume_change, avg_ai_sentiment_score, details_json)
+         dr007_change, omo_net_injection_amount, omo_operation_rate,
+         avg_futures_return, avg_volume_change, avg_ai_sentiment_score, details_json)
         VALUES (:date, :yield_10y_change, :yield_30y_change, :spread_10y_2y, :spread_30y_10y,
-                :dr007_change, :avg_futures_return, :avg_volume_change, :avg_ai_sentiment_score, :details_json)
+                :dr007_change, :omo_net_injection_amount, :omo_operation_rate,
+                :avg_futures_return, :avg_volume_change, :avg_ai_sentiment_score, :details_json)
         ON CONFLICT(date) DO UPDATE SET
             yield_10y_change=excluded.yield_10y_change,
             yield_30y_change=excluded.yield_30y_change,
             spread_10y_2y=excluded.spread_10y_2y,
             spread_30y_10y=excluded.spread_30y_10y,
             dr007_change=excluded.dr007_change,
+            omo_net_injection_amount=excluded.omo_net_injection_amount,
+            omo_operation_rate=excluded.omo_operation_rate,
             avg_futures_return=excluded.avg_futures_return,
             avg_volume_change=excluded.avg_volume_change,
             avg_ai_sentiment_score=excluded.avg_ai_sentiment_score,
@@ -264,7 +310,7 @@ def upsert_daily_market_signal(conn: sqlite3.Connection, signal: dict[str, Any])
 def log_run(conn: sqlite3.Connection, run_date: str, status: str, message: str) -> None:
     conn.execute(
         "INSERT INTO run_log (run_time, run_date, status, message) VALUES (?, ?, ?, ?)",
-        (datetime.utcnow().isoformat(timespec="seconds"), run_date, status, message),
+        (datetime.now(UTC).replace(tzinfo=None).isoformat(timespec="seconds"), run_date, status, message),
     )
     conn.commit()
 
@@ -287,6 +333,7 @@ def purge_daily_data_for_date(conn: sqlite3.Connection, run_date: str) -> None:
     conn.execute("DELETE FROM futures_quotes WHERE date = ?", (run_date,))
     conn.execute("DELETE FROM bond_yields WHERE date = ?", (run_date,))
     conn.execute("DELETE FROM funding_rates WHERE date = ?", (run_date,))
+    conn.execute("DELETE FROM open_market_operations WHERE date = ?", (run_date,))
     conn.commit()
 
 
@@ -318,6 +365,7 @@ def fetch_table_for_date(conn: sqlite3.Connection, table: str, date: str) -> lis
         "futures_quotes",
         "bond_yields",
         "funding_rates",
+        "open_market_operations",
         "ai_text_signals",
         "daily_features",
         "daily_market_signals",
@@ -331,3 +379,9 @@ def _insert_many(conn: sqlite3.Connection, sql: str, rows: Iterable[dict[str, An
     conn.executemany(sql, list(rows))
     conn.commit()
     return conn.total_changes - before
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")

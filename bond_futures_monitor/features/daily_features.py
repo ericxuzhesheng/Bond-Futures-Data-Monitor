@@ -19,6 +19,15 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
         row["rate_name"]: row["rate_value"]
         for row in conn.execute("SELECT rate_name, rate_value FROM funding_rates WHERE date = ?", (run_date,))
     }
+    omo_rows = conn.execute(
+        """
+        SELECT operation_type, tenor_days, operation_amount, maturity_amount,
+               net_injection_amount, operation_rate, data_source
+        FROM open_market_operations
+        WHERE date = ?
+        """,
+        (run_date,),
+    ).fetchall()
     futures = conn.execute(
         "SELECT contract, daily_return, volume, data_source FROM futures_quotes WHERE date = ?",
         (run_date,),
@@ -34,6 +43,10 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
     news_sources = {
         row["data_source"]
         for row in conn.execute("SELECT DISTINCT data_source FROM policy_news WHERE date = ?", (run_date,))
+    }
+    omo_sources = {
+        row["data_source"]
+        for row in conn.execute("SELECT DISTINCT data_source FROM open_market_operations WHERE date = ?", (run_date,))
     }
     ai_rows = conn.execute(
         """
@@ -59,6 +72,13 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
     yield_30y_change = _yield_change(conn, run_date, "30Y")
     dr007_change = _rate_change(conn, run_date, "DR007")
     avg_volume_change = _avg_volume_change(conn, run_date, volumes)
+    omo_net_injection_amount = sum(float(row["net_injection_amount"]) for row in omo_rows) if omo_rows else None
+    operation_rates = [
+        float(row["operation_rate"])
+        for row in omo_rows
+        if row["operation_rate"] is not None
+    ]
+    omo_operation_rate = mean(operation_rates) if operation_rates else None
 
     return {
         "date": run_date,
@@ -67,6 +87,8 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
         "spread_10y_2y": _spread(yields, "10Y", "2Y"),
         "spread_30y_10y": _spread(yields, "30Y", "10Y"),
         "dr007_change": dr007_change,
+        "omo_net_injection_amount": omo_net_injection_amount,
+        "omo_operation_rate": omo_operation_rate,
         "avg_futures_return": mean(futures_returns) if futures_returns else None,
         "avg_volume_change": avg_volume_change,
         "avg_ai_sentiment_score": mean(ai_scores) if ai_scores else 0.0,
@@ -79,6 +101,7 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
                 "futures": sorted({row["data_source"] for row in futures}),
                 "yield_curve": sorted(yield_sources),
                 "funding": sorted(funding_sources),
+                "open_market_operations": sorted(omo_sources),
                 "policy_news": sorted(news_sources),
             },
             "feature_groups": {
@@ -91,6 +114,11 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
                 "funding": {
                     "dr007_change": dr007_change,
                     "available_rates": sorted(funding),
+                },
+                "open_market_operations": {
+                    "omo_net_injection_amount": omo_net_injection_amount,
+                    "omo_operation_rate": omo_operation_rate,
+                    "operation_count": len(omo_rows),
                 },
                 "futures": {
                     "avg_futures_return": mean(futures_returns) if futures_returns else None,
