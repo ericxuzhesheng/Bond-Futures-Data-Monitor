@@ -32,6 +32,14 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
         "SELECT contract, daily_return, volume, data_source FROM futures_quotes WHERE date = ?",
         (run_date,),
     ).fetchall()
+    macro = {
+        row["indicator"]: row["value"]
+        for row in conn.execute("SELECT indicator, value FROM macro_indicators WHERE date = ?", (run_date,))
+    }
+    macro_sources = {
+        row["data_source"]
+        for row in conn.execute("SELECT DISTINCT data_source FROM macro_indicators WHERE date = ?", (run_date,))
+    }
     yield_sources = {
         row["data_source"]
         for row in conn.execute("SELECT DISTINCT data_source FROM bond_yields WHERE date = ?", (run_date,))
@@ -88,6 +96,7 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
         "details": {
             "yield_curve": yields,
             "funding_rates": funding,
+            "macro_indicators": macro,
             "futures_contract_count": len(futures),
             "ai_signal_count": len(ai_scores),
             "data_sources": {
@@ -96,6 +105,7 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
                 "funding": sorted(funding_sources),
                 "open_market_operations": sorted(omo_sources),
                 "policy_news": sorted(news_sources),
+                "macro": sorted(macro_sources),
             },
             "feature_groups": {
                 "rates": {
@@ -120,6 +130,14 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
                 "text": {
                     "avg_ai_sentiment_score": mean(ai_scores) if ai_scores else 0.0,
                     "signal_count": len(ai_scores),
+                },
+                "macro": {
+                    "lpr_1y": macro.get("LPR_1Y"),
+                    "lpr_5y": macro.get("LPR_5Y"),
+                    "cpi_yoy": macro.get("CPI_YOY"),
+                    "ppi_yoy": macro.get("PPI_YOY"),
+                    "pmi_mfg": macro.get("PMI_MFG"),
+                    "indicator_count": len(macro),
                 },
             },
         },

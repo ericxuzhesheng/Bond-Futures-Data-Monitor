@@ -6,6 +6,7 @@ from bond_futures_monitor.database import (
     insert_bond_yields,
     insert_funding_rates,
     insert_futures_quotes,
+    insert_macro_indicators,
     insert_open_market_operations,
     insert_policy_news,
     log_run,
@@ -76,6 +77,25 @@ def seed_real_source_rows(conn, run_date: str = RUN_DATE) -> None:
             }
         ],
     )
+    insert_macro_indicators(
+        conn,
+        [
+            {
+                "date": run_date,
+                "indicator": indicator,
+                "value": value,
+                "period": period,
+                "data_source": data_source,
+            }
+            for indicator, value, period, data_source in [
+                ("LPR_1Y", 3.0, "2026-05-20", "tushare_shibor_lpr:20260520"),
+                ("LPR_5Y", 3.5, "2026-05-20", "tushare_shibor_lpr:20260520"),
+                ("CPI_YOY", 0.5, "2026-05", "tushare_cn_cpi:202605"),
+                ("PPI_YOY", -2.1, "2026-05", "tushare_cn_ppi:202605"),
+                ("PMI_MFG", 49.2, "2026-05", "tushare_cn_pmi:202605"),
+            ]
+        ],
+    )
     insert_policy_news(
         conn,
         [
@@ -129,7 +149,11 @@ def test_daily_report_generation(tmp_path):
     assert "数据库写入结果" in content
     assert "open_market_operations: 1 rows" in content
     assert "run_status: success" in content
-    for category in ["利率方向", "曲线形态", "资金面", "公开市场操作", "期货量价", "文本信号"]:
+    assert "## 宏观基本面概览" in content
+    assert "| 制造业 PMI | 49.20 | 2026-05 |" in content
+    assert "| LPR 1年期 | 3.00% | 2026-05-20 |" in content
+    assert "macro_indicators: 5 rows" in content
+    for category in ["利率方向", "曲线形态", "资金面", "公开市场操作", "期货量价", "文本信号", "宏观基本面"]:
         assert f"| {category} |" in content
     assert "sample" not in content.lower()
 

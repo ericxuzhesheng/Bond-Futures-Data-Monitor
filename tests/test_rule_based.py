@@ -1,7 +1,7 @@
 from bond_futures_monitor.signals.rule_based import generate_market_signal
 
 
-EXPECTED_CATEGORIES = {"利率方向", "曲线形态", "资金面", "公开市场操作", "期货量价", "文本信号"}
+EXPECTED_CATEGORIES = {"利率方向", "曲线形态", "资金面", "公开市场操作", "期货量价", "文本信号", "宏观基本面"}
 
 
 def test_rule_based_scoring_bullish():
@@ -16,6 +16,7 @@ def test_rule_based_scoring_bullish():
             "avg_ai_sentiment_score": 1,
             "spread_10y_2y": 0.4,
             "spread_30y_10y": 0.2,
+            "details": {"macro_indicators": {"PMI_MFG": 49.2}},
         }
     )
     assert signal["market_view"] == "bullish"
@@ -54,6 +55,7 @@ def test_rule_based_scoring_exposes_zero_score_dimensions():
             "avg_ai_sentiment_score": 0,
             "spread_10y_2y": 0.4,
             "spread_30y_10y": 0.5,
+            "details": {"macro_indicators": {"PMI_MFG": 50.1}},
         }
     )
     assert set(signal["details"]["score_summary"]) == EXPECTED_CATEGORIES

@@ -38,6 +38,18 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # The SQLite database is gitignored, so without a cache every CI run
+      # starts from an empty database and all cross-day features (yield/DR007
+      # changes, volume changes) are unscored. Restore the most recent cache
+      # so the run sees prior trading days' history.
+      - name: Restore database cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: bond-futures-db-${{ github.run_id }}
+          restore-keys: |
+            bond-futures-db-
+
       - name: Resolve run date
         shell: bash
         run: |
@@ -57,6 +69,15 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+      # Save the updated database under a unique key; the next run restores
+      # the newest cache via the restore-keys prefix match above.
+      - name: Save database cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: bond-futures-db-${{ github.run_id }}
 
       - name: Commit report
         shell: bash

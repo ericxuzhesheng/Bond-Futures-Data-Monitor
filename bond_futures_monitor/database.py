@@ -51,6 +51,15 @@ CREATE TABLE IF NOT EXISTS open_market_operations (
     PRIMARY KEY (date, operation_type, tenor_days, source_title)
 );
 
+CREATE TABLE IF NOT EXISTS macro_indicators (
+    date TEXT NOT NULL,
+    indicator TEXT NOT NULL,
+    value REAL NOT NULL,
+    period TEXT NOT NULL,
+    data_source TEXT NOT NULL,
+    PRIMARY KEY (date, indicator)
+);
+
 CREATE TABLE IF NOT EXISTS policy_news (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     date TEXT NOT NULL,
@@ -214,6 +223,25 @@ def insert_open_market_operations(conn: sqlite3.Connection, rows: Iterable[dict[
     )
 
 
+def insert_macro_indicators(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
+    return _insert_many(
+        conn,
+        """
+        INSERT INTO macro_indicators
+        (date, indicator, value, period, data_source)
+        VALUES (:date, :indicator, :value, :period, :data_source)
+        ON CONFLICT(date, indicator) DO UPDATE SET
+            value=excluded.value,
+            period=excluded.period,
+            data_source=excluded.data_source
+        WHERE macro_indicators.value IS NOT excluded.value
+           OR macro_indicators.period IS NOT excluded.period
+           OR macro_indicators.data_source IS NOT excluded.data_source
+        """,
+        rows,
+    )
+
+
 def insert_policy_news(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
     return _insert_many(
         conn,
@@ -334,6 +362,7 @@ def purge_daily_data_for_date(conn: sqlite3.Connection, run_date: str) -> None:
     conn.execute("DELETE FROM bond_yields WHERE date = ?", (run_date,))
     conn.execute("DELETE FROM funding_rates WHERE date = ?", (run_date,))
     conn.execute("DELETE FROM open_market_operations WHERE date = ?", (run_date,))
+    conn.execute("DELETE FROM macro_indicators WHERE date = ?", (run_date,))
     conn.commit()
 
 
@@ -366,6 +395,7 @@ def fetch_table_for_date(conn: sqlite3.Connection, table: str, date: str) -> lis
         "bond_yields",
         "funding_rates",
         "open_market_operations",
+        "macro_indicators",
         "ai_text_signals",
         "daily_features",
         "daily_market_signals",

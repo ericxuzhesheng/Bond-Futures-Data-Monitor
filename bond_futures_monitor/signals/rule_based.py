@@ -15,6 +15,7 @@ def generate_market_signal(features: dict[str, Any]) -> dict[str, Any]:
     _score_omo(score_items, features)
     _score_futures(score_items, features)
     _score_text(score_items, features)
+    _score_macro(score_items, features)
 
     if features.get("spread_30y_10y") is not None and features["spread_30y_10y"] > 0.35:
         risks.append("30Y-10Y 曲线偏陡，可能反映超长端供给或期限溢价扰动。")
@@ -118,6 +119,19 @@ def _score_text(score_items: list[dict[str, Any]], features: dict[str, Any]) -> 
         _add_score(score_items, "文本信号", -1, "政策与新闻文本信号整体偏空。")
     else:
         _add_score(score_items, "文本信号", 0, "新闻文本整体处于中性区间。")
+
+
+def _score_macro(score_items: list[dict[str, Any]], features: dict[str, Any]) -> None:
+    macro = features.get("details", {}).get("macro_indicators", {})
+    pmi = macro.get("PMI_MFG")
+    if pmi is None:
+        _add_score(score_items, "宏观基本面", 0, "缺少制造业 PMI，宏观基本面暂不计分。")
+    elif pmi < 49.5:
+        _add_score(score_items, "宏观基本面", 0.5, f"制造业 PMI {pmi:.1f} 低于荣枯线，基本面偏弱支撑债市。")
+    elif pmi > 50.5:
+        _add_score(score_items, "宏观基本面", -0.5, f"制造业 PMI {pmi:.1f} 高于荣枯线，基本面偏强压制债市。")
+    else:
+        _add_score(score_items, "宏观基本面", 0, f"制造业 PMI {pmi:.1f} 处于荣枯线附近，宏观基本面中性。")
 
 
 def _add_score(score_items: list[dict[str, Any]], category: str, score: float, reason: str) -> None:

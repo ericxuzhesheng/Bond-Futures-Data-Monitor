@@ -35,6 +35,16 @@ def test_validate_real_data_coverage_rejects_missing_required_rows(tmp_path):
             validate_real_data_coverage(conn, RUN_DATE)
 
 
+def test_validate_real_data_coverage_rejects_missing_macro_rows(tmp_path):
+    with connect(tmp_path / "monitor.db") as conn:
+        init_db(conn)
+        seed_real_source_rows(conn)
+        conn.execute("DELETE FROM macro_indicators WHERE date = ? AND indicator = 'PMI_MFG'", (RUN_DATE,))
+        conn.commit()
+        with pytest.raises(RuntimeError, match="macro_indicators"):
+            validate_real_data_coverage(conn, RUN_DATE)
+
+
 def test_validate_real_data_coverage_rejects_missing_omo_rows(tmp_path):
     with connect(tmp_path / "monitor.db") as conn:
         init_db(conn)

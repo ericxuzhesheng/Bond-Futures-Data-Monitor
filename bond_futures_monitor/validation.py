@@ -8,6 +8,7 @@ import sqlite3
 REQUIRED_CONTRACTS = {"TS", "TF", "T", "TL"}
 REQUIRED_TENORS = {"1Y", "2Y", "5Y", "10Y", "30Y"}
 REQUIRED_RATE_NAMES = {"DR001", "DR007", "R007", "SHIBOR_ON", "SHIBOR_7D"}
+REQUIRED_MACRO_INDICATORS = {"LPR_1Y", "LPR_5Y", "CPI_YOY", "PPI_YOY", "PMI_MFG"}
 
 
 def validate_real_data_coverage(conn: sqlite3.Connection, run_date: str) -> None:
@@ -18,6 +19,7 @@ def validate_real_data_coverage(conn: sqlite3.Connection, run_date: str) -> None
         _coverage_check(conn, "futures_quotes", "contract", run_date, REQUIRED_CONTRACTS),
         _coverage_check(conn, "bond_yields", "tenor", run_date, REQUIRED_TENORS),
         _coverage_check(conn, "funding_rates", "rate_name", run_date, REQUIRED_RATE_NAMES),
+        _coverage_check(conn, "macro_indicators", "indicator", run_date, REQUIRED_MACRO_INDICATORS),
     ]
     omo_count = conn.execute(
         "SELECT COUNT(*) AS n FROM open_market_operations WHERE date = ?",
@@ -32,7 +34,14 @@ def validate_real_data_coverage(conn: sqlite3.Connection, run_date: str) -> None
 
     total_rows = sum(
         conn.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE date = ?", (run_date,)).fetchone()["n"]
-        for table in ("futures_quotes", "bond_yields", "funding_rates", "open_market_operations", "policy_news")
+        for table in (
+            "futures_quotes",
+            "bond_yields",
+            "funding_rates",
+            "open_market_operations",
+            "policy_news",
+            "macro_indicators",
+        )
     )
     if total_rows < 5:
         checks.append(f"daily data rows: expected at least 5 real rows, got {total_rows}")
@@ -58,7 +67,14 @@ def _coverage_check(
 
 
 def _assert_no_sample_sources(conn: sqlite3.Connection, run_date: str) -> None:
-    tables = ("futures_quotes", "bond_yields", "funding_rates", "open_market_operations", "policy_news")
+    tables = (
+        "futures_quotes",
+        "bond_yields",
+        "funding_rates",
+        "open_market_operations",
+        "policy_news",
+        "macro_indicators",
+    )
     sample_hits = []
     for table in tables:
         rows = conn.execute(
