@@ -21,12 +21,10 @@ def validate_real_data_coverage(conn: sqlite3.Connection, run_date: str) -> None
         _coverage_check(conn, "funding_rates", "rate_name", run_date, REQUIRED_RATE_NAMES),
         _coverage_check(conn, "macro_indicators", "indicator", run_date, REQUIRED_MACRO_INDICATORS),
     ]
-    omo_count = conn.execute(
-        "SELECT COUNT(*) AS n FROM open_market_operations WHERE date = ?",
-        (run_date,),
-    ).fetchone()["n"]
-    if omo_count < 1:
-        checks.append("open_market_operations: expected at least 1 parsed OMO row, got 0")
+    # OMO is a single text-derived stream with no alternate source; the upstream
+    # news feed occasionally omits the daily PBOC announcement. A missing OMO row
+    # is tolerated (the signal scores it neutral and annotates it) rather than
+    # failing the whole run.
 
     news_count = conn.execute("SELECT COUNT(*) AS n FROM policy_news WHERE date = ?", (run_date,)).fetchone()["n"]
     if news_count < 1:

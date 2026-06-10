@@ -45,11 +45,13 @@ def test_validate_real_data_coverage_rejects_missing_macro_rows(tmp_path):
             validate_real_data_coverage(conn, RUN_DATE)
 
 
-def test_validate_real_data_coverage_rejects_missing_omo_rows(tmp_path):
+def test_validate_real_data_coverage_tolerates_missing_omo_rows(tmp_path):
+    # OMO is a single text-derived stream with no alternate source; the upstream
+    # news feed occasionally omits the daily PBOC announcement. A missing OMO row
+    # must not fail the run — the signal scores it neutral and annotates it.
     with connect(tmp_path / "monitor.db") as conn:
         init_db(conn)
         seed_real_source_rows(conn)
         conn.execute("DELETE FROM open_market_operations WHERE date = ?", (RUN_DATE,))
         conn.commit()
-        with pytest.raises(RuntimeError, match="open_market_operations"):
-            validate_real_data_coverage(conn, RUN_DATE)
+        validate_real_data_coverage(conn, RUN_DATE)

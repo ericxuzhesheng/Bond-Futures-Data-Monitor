@@ -2,23 +2,38 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from bond_futures_monitor.collectors.news_feed import fetch_cls_news
 
 
+logger = logging.getLogger(__name__)
+
 OMO_KEYWORDS = ("央行", "人民银行", "公开市场", "逆回购", "净投放", "净回笼", "到期")
 
 
 def collect_open_market_operations(run_date: str, use_live_data: bool = True) -> list[dict[str, object]]:
-    """Collect and parse real PBOC open-market-operation text from Tushare news."""
+    """Collect and parse real PBOC open-market-operation text from Tushare news.
+
+    OMO is a single text-derived stream: the upstream CLS news feed sometimes
+    omits the daily PBOC announcement, and there is no alternate data source for
+    it. When the feed is reachable but carries no OMO item, degrade gracefully by
+    returning no rows; downstream feature/signal logic scores the OMO dimension
+    as neutral and annotates the missing data. A genuinely unreachable feed still
+    raises from ``fetch_cls_news``, preserving strict failure for real outages.
+    """
 
     if not use_live_data:
         raise RuntimeError("Sample data is disabled; open-market operations must come from a live source.")
 
     rows = _collect_tushare_news(run_date)
     if not rows:
-        raise RuntimeError(f"No live open-market-operation rows could be parsed for {run_date}.")
+        logger.warning(
+            "No OMO announcement found in the news feed for %s; "
+            "scoring the OMO dimension as neutral.",
+            run_date,
+        )
     return rows
 
 
