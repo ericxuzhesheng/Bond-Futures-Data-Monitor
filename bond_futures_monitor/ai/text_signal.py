@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Any
 
 from bond_futures_monitor.ai.schema import AFFECTED_MATURITIES, BOND_IMPACTS, CONTRACTS, EVENT_TYPES
+from bond_futures_monitor.retry import retry_call
+
+
+logger = logging.getLogger(__name__)
 
 
 _RULE_MODEL = "rule-based-text-signal-v4"
@@ -36,6 +41,8 @@ def sentiment_score(bond_impact: str) -> int:
 
 
 def validate_signal(signal: dict[str, Any]) -> None:
+    if signal.get("news_id") is None:
+        raise ValueError("news_id is required for AI text signals")
     if signal["event_type"] not in EVENT_TYPES:
         raise ValueError(f"Invalid event_type: {signal['event_type']}")
     if signal["bond_impact"] not in BOND_IMPACTS:
@@ -76,10 +83,14 @@ def _classify_with_llm(text: str) -> dict[str, Any] | None:
 }}"""
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
-            model=_LLM_MODEL,
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
+        msg = retry_call(
+            lambda: client.messages.create(
+                model=_LLM_MODEL,
+                max_tokens=512,
+                messages=[{"role": "user", "content": prompt}],
+            ),
+            attempts=2,
+            description="Anthropic text-signal classification",
         )
         raw = msg.content[0].text.strip()
         if raw.startswith("```"):
@@ -88,6 +99,11 @@ def _classify_with_llm(text: str) -> dict[str, Any] | None:
             raw = content[4:].lstrip() if content.startswith("json") else content.lstrip()
         result: dict[str, Any] = json.loads(raw)
     except Exception:
+        logger.warning("LLM classification failed; falling back to rule-based signal.", exc_info=True)
+        return None
+
+    if not isinstance(result, dict):
+        logger.warning("LLM returned non-object JSON; falling back to rule-based signal.")
         return None
 
     result["event_type"] = result.get("event_type") if result.get("event_type") in EVENT_TYPES else "other"
@@ -95,10 +111,25 @@ def _classify_with_llm(text: str) -> dict[str, Any] | None:
     result["affected_maturity"] = (
         result.get("affected_maturity") if result.get("affected_maturity") in AFFECTED_MATURITIES else "unclear"
     )
-    result["related_contracts"] = [c for c in result.get("related_contracts", []) if c in CONTRACTS]
-    result["confidence"] = max(1, min(5, int(result.get("confidence", 2))))
+    contracts = result.get("related_contracts")
+    result["related_contracts"] = (
+        [c for c in contracts if c in CONTRACTS] if isinstance(contracts, list) else []
+    )
+    result["confidence"] = _safe_confidence(result.get("confidence"))
+    result["summary"] = str(result.get("summary") or "").strip() or "未提供摘要"
+    result["reasoning"] = str(result.get("reasoning") or "").strip() or "未提供推理"
     result["model_name"] = _LLM_MODEL
     return result
+
+
+def _safe_confidence(value: Any, default: int = 2) -> int:
+    """Coerce an LLM-provided confidence into the 1-5 range without raising."""
+
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(5, number))
 
 
 def _classify_with_rules(title: str, content: str) -> dict[str, Any]:

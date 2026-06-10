@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -35,7 +36,18 @@ from bond_futures_monitor.signals.rule_based import generate_market_signal
 from bond_futures_monitor.validation import validate_real_data_coverage
 
 
+logger = logging.getLogger(__name__)
+
+
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
+    configure_logging()
     parser = argparse.ArgumentParser(description="China Treasury bond futures real-data monitor")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -68,6 +80,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"日报已生成：{settings.reports_output_dir / f'{args.date}_daily_report.md'}")
                 return 0
             except Exception as exc:
+                # The pipeline purges the run date before refreshing, so a partial
+                # run is self-healing on the next rerun; log the failure for ops.
+                logger.error("Daily pipeline failed for %s: %s", args.date, exc)
                 log_run(conn, args.date, "failed", str(exc))
                 raise
 

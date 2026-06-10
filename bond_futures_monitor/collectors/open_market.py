@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import re
-from datetime import date as Date
-from typing import Any
+
+from bond_futures_monitor.collectors.news_feed import fetch_cls_news
 
 
 OMO_KEYWORDS = ("央行", "人民银行", "公开市场", "逆回购", "净投放", "净回笼", "到期")
@@ -64,30 +63,12 @@ def parse_omo_text(run_date: str, title: str, content: str, data_source: str) ->
 
 
 def _collect_tushare_news(run_date: str) -> list[dict[str, object]]:
-    try:
-        import tushare as ts  # type: ignore
-    except Exception as exc:
-        raise RuntimeError("Tushare is required for open-market operations.") from exc
-
-    token = os.getenv("TUSHARE_TOKEN")
-    if not token:
-        raise RuntimeError("TUSHARE_TOKEN is required for open-market operations.")
-
-    pro = ts.pro_api(token)
-    try:
-        df = pro.news(src="cls", start_date=f"{run_date} 00:00:00", end_date=f"{run_date} 23:59:59")
-    except Exception as exc:
-        raise RuntimeError(f"Tushare news query failed for open-market operations on {run_date}.") from exc
-
-    if df is None or df.empty:
-        return []
+    items = fetch_cls_news(run_date)
 
     rows: list[dict[str, object]] = []
     seen_keys: set[tuple[str, int | None]] = set()
-    for _, item in df.iterrows():
-        title = str(item.get("title") or "").strip()
-        content = str(item.get("content") or "").strip()
-        parsed_rows = parse_omo_text(run_date, title, content, f"tushare_news_cls:{run_date}")
+    for item in items:
+        parsed_rows = parse_omo_text(run_date, item["title"], item["content"], f"tushare_news_cls:{run_date}")
         for row in parsed_rows:
             key = (str(row["operation_type"]), row["tenor_days"] if isinstance(row["tenor_days"], int) else None)
             if key in seen_keys:

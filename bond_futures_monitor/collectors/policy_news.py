@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import os
+from bond_futures_monitor.collectors.news_feed import fetch_cls_news
 
 
 CORE_RATE_TERMS = (
@@ -113,29 +113,13 @@ def collect_policy_news(run_date: str, use_live_data: bool = True) -> list[dict[
 
 
 def _collect_tushare_news(run_date: str) -> list[dict[str, object]]:
-    try:
-        import tushare as ts  # type: ignore
-    except Exception as exc:
-        raise RuntimeError("Tushare is required for policy/news text.") from exc
-
-    token = os.getenv("TUSHARE_TOKEN")
-    if not token:
-        raise RuntimeError("TUSHARE_TOKEN is required for policy/news text.")
-
-    pro = ts.pro_api(token)
-    try:
-        df = pro.news(src="cls", start_date=f"{run_date} 00:00:00", end_date=f"{run_date} 23:59:59")
-    except Exception as exc:
-        raise RuntimeError(f"Tushare news query failed for {run_date}.") from exc
-
-    if df is None or df.empty:
-        return []
+    items = fetch_cls_news(run_date)
 
     rows: list[dict[str, object]] = []
     seen_titles: set[str] = set()
-    for _, item in df.iterrows():
-        title = str(item.get("title") or "").strip()
-        content = str(item.get("content") or "").strip()
+    for item in items:
+        title = item["title"]
+        content = item["content"]
         if not title and not content:
             continue
         text = f"{title} {content}"
@@ -151,7 +135,7 @@ def _collect_tushare_news(run_date: str) -> list[dict[str, object]]:
                 "title": title or content[:40],
                 "source": "财联社",
                 "content": content,
-                "url": str(item.get("url") or ""),
+                "url": item["url"],
                 "data_source": f"tushare_news_cls:{run_date}",
             }
         )
