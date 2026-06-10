@@ -1,6 +1,6 @@
 # 中国国债期货真实数据监控 | Bond Futures Real-Data Monitor
 
-这是一个面向中国国债期货研究的每日真实数据监控项目。项目每天按固定时间抓取市场行情、利率曲线、资金面和政策新闻数据，完成清洗、结构化、入库、特征构造、文本信号提取、规则评分和日报生成。
+这是一个面向中国国债期货研究的每日真实数据监控项目。项目每天北京时间 19:00 后自动抓取六路真实数据——期货行情、国债收益率曲线、资金利率、央行公开市场操作、政策新闻文本、宏观基本面指标——完成清洗、结构化、入库、特征构造、文本信号提取、规则评分和日报生成。
 
 项目的核心目标不是直接预测国债期货价格，而是搭建一条稳定、可复核、可扩展的数据研究链路：
 
@@ -17,8 +17,10 @@
 - 期货自身的价格、成交量和持仓变化。
 - 国债收益率曲线的短端、中端、长端变化。
 - 银行间资金面和回购利率。
-- 财政、货币政策、债券供给、宏观数据和风险偏好相关信息。
+- 央行公开市场操作的投放与回笼节奏。
+- 财政、货币政策、债券供给和风险偏好相关信息。
 - 新闻文本中隐含的利率债方向性信号。
+- LPR、CPI、PPI、PMI 等宏观基本面数据。
 
 这个项目把这些信息放进同一条每日自动化流程中，形成一个轻量但完整的研究底座。它适合作为后续扩展的基础，例如加入更多数据源、更多文本模型、可视化面板、历史回测或策略研究。
 
@@ -38,7 +40,7 @@
 
 ```text
 bond_futures_monitor/
-  collectors/       # 真实数据采集：期货、收益率、资金利率、公开市场操作、政策新闻
+  collectors/       # 真实数据采集：期货、收益率、资金利率、公开市场操作、政策新闻、宏观指标
   ai/               # 政策/新闻文本结构化，输出固定 schema 的利率债信号
   features/         # 每日特征构造：曲线、资金面、量价、文本情绪
   signals/          # 可解释规则评分：偏多、偏空、中性
@@ -57,7 +59,7 @@ scripts/            # 本地自动调度脚本
 1. 解析运行日期，默认使用北京时间当天。
 2. 初始化 SQLite 表结构。
 3. 清空同一日期的旧原始数据和派生数据，保证重跑是一次完整刷新。
-4. 调用各类 collector 抓取真实数据。
+4. 调用各类 collector 抓取真实数据（含宏观指标的最新可得一期）。
 5. 执行真实数据覆盖校验。
 6. 对政策/新闻文本生成结构化信号。
 7. 构造每日特征。
@@ -153,6 +155,20 @@ scripts/            # 本地自动调度脚本
 
 这一步的目标不是过滤得越多越好，而是减少“看似金融、实际和国债期货关系很弱”的文本进入结构化报告。
 
+### 宏观基本面指标
+
+宏观数据决定利率债的中期趋势背景。项目从 Tushare 获取五个核心指标，记录的是**运行日可得的最新一期发布值**，并在 `period` 字段保留数据期：
+
+| 指标 | 来源接口 | 研究含义 |
+|---|---|---|
+| `LPR_1Y` | `shibor_lpr` | 1 年期贷款市场报价利率，政策利率锚 |
+| `LPR_5Y` | `shibor_lpr` | 5 年期以上 LPR，与地产和长端更相关 |
+| `CPI_YOY` | `cn_cpi` | CPI 同比，通胀压力 |
+| `PPI_YOY` | `cn_ppi` | PPI 同比，工业品价格和名义增长 |
+| `PMI_MFG` | `cn_pmi` | 制造业 PMI，景气度与荣枯线对比 |
+
+宏观指标按月度或不定期发布，与日频数据天然不同步。项目的处理方式是按运行日落库当时最新值，既保证每日报告有完整宏观背景，也保留了"当时可知"的时点信息，避免未来数据泄漏。
+
 ## 数据清洗与结构化
 
 采集到的数据会在进入数据库前做基础清洗：
@@ -175,6 +191,7 @@ scripts/            # 本地自动调度脚本
 | `funding_rates` | 资金利率 |
 | `open_market_operations` | 公开市场操作 |
 | `policy_news` | 政策/新闻文本 |
+| `macro_indicators` | 宏观基本面指标 |
 | `ai_text_signals` | 文本结构化信号 |
 | `daily_features` | 每日特征 |
 | `daily_market_signals` | 每日规则判断 |
@@ -189,9 +206,10 @@ scripts/            # 本地自动调度脚本
 - 必须覆盖 `TS`、`TF`、`T`、`TL` 四个国债期货品种。
 - 必须覆盖 `1Y`、`2Y`、`5Y`、`10Y`、`30Y` 五个收益率期限。
 - 必须覆盖 `DR001`、`DR007`、`R007`、`SHIBOR_ON`、`SHIBOR_7D` 五个资金利率指标。
+- 必须覆盖 `LPR_1Y`、`LPR_5Y`、`CPI_YOY`、`PPI_YOY`、`PMI_MFG` 五个宏观指标。
 - 必须至少解析到 1 条公开市场操作记录。
 - 当天至少有 1 条固定收益相关政策/新闻文本。
-- 五类原始表合计至少有 5 条真实数据。
+- 六类原始表合计至少有 5 条真实数据。
 - `data_source` 中不得出现 sample/mock/fake 一类非真实来源标记。
 
 只要有一项不满足，程序会抛出错误，并在 `run_log` 中记录失败原因。这样做的好处是，报告宁可缺席，也不输出不可靠结论。
@@ -264,6 +282,11 @@ scripts/            # 本地自动调度脚本
 - `avg_ai_sentiment_score`
 - 文本信号数量
 
+宏观特征：
+
+- LPR、CPI 同比、PPI 同比、制造业 PMI 的最新可得值
+- 宏观指标覆盖数量
+
 这些特征会写入 `daily_features` 表，同时在日报的“特征面板”中展示。
 
 ## 市场判断逻辑
@@ -292,6 +315,8 @@ scripts/            # 本地自动调度脚本
 | 期货下跌且成交活跃度提高 | 偏空 |
 | 文本信号整体偏多 | 偏多 |
 | 文本信号整体偏空 | 偏空 |
+| 制造业 PMI 低于荣枯线 | 小幅偏多 |
+| 制造业 PMI 高于荣枯线 | 小幅偏空 |
 
 最终规则：
 
@@ -319,6 +344,7 @@ reports_output/YYYY-MM-DD_daily_report.md
 - 国债期货概览。
 - 收益率曲线概览。
 - 资金面概览。
+- 宏观基本面概览。
 - 公开市场操作概览。
 - 政策与新闻结构化解读。
 - 核心驱动。
@@ -334,12 +360,13 @@ reports_output/YYYY-MM-DD_daily_report.md
 资金利率：5 条
 公开市场操作：1 条
 政策/新闻文本：5 条
-当日真实数据合计：20 条
+宏观基本面指标：5 条
+当日真实数据合计：25 条
 ```
 
 ## 环境配置
 
-建议使用 Python 3.8 或更高版本。
+建议使用 Python 3.11（与 CI 一致），3.10 及以上可运行。
 
 ```powershell
 python -m venv .venv
@@ -417,10 +444,14 @@ workflow 会执行：
 
 1. 拉取仓库。
 2. 安装依赖。
-3. 解析运行日期。
-4. 执行每日监控流程。
-5. 运行测试。
-6. 提交更新后的日报。
+3. 恢复数据库缓存（`actions/cache`，按前缀匹配最近一次）。
+4. 解析运行日期。
+5. 执行每日监控流程。
+6. 运行测试。
+7. 保存更新后的数据库缓存。
+8. 提交更新后的日报。
+
+数据库文件本身不入库（gitignore），通过 Actions cache 在每日运行之间传递。这样 CI 上也能看到前几个交易日的历史，跨日特征（收益率变化、DR007 变化、量能变化）不会因为每次从空库启动而无法计分。
 
 ### Windows Task Scheduler
 
@@ -446,22 +477,43 @@ scripts\run_daily_local.ps1
 pytest -q --basetemp .pytest_tmp
 ```
 
-测试覆盖：
+测试覆盖（当前 48 个用例）：
 
 - 采集器在关闭真实数据时必须失败。
 - Tushare 采集器缺少 token 时必须失败。
-- 新闻相关性过滤。
+- 行情字段缺失/NaN 必须报错而非填零。
+- 中金所与新浪行情的合并回退逻辑。
+- 利率、收益率、宏观指标的合理区间校验。
+- 宏观月度数据的最新期选取和大小写列名兼容。
+- 新闻相关性过滤和 OMO 文本解析。
 - 数据库初始化和去重。
 - 真实数据质量闸门。
 - 文本结构化 schema。
 - 规则评分逻辑。
 - 日报生成。
 
+## 数据质量与工程权衡
+
+开发过程中踩到的真实数据源问题，以及对应的处理决策（都有注释和测试固化）：
+
+**Tushare `repo_daily` 没有 `rate` 字段。** 回购数据的利率藏在 `weight` 字段（成交量加权平均价），这正是 DR007/R007 官方定盘的定义。已用 SHIBOR_7D 交叉验证（两者长期相差在 1bp 内）确认取数正确。
+
+**宁可失败，不静默填零。** 行情字段缺失或为 NaN 时直接抛错，而不是写入 0.0。一个收盘价为 0 的合约会污染日收益率、量价特征和最终评分，且很难在下游发现；缺一天报告的代价远小于输出一份错误报告。
+
+**所有数值入库前做合理区间校验。** 资金利率限定 (0, 20)%、收益率 (0, 15)%、PMI (20, 80) 等。越界值几乎一定是取错了字段或数据源异常，而不是真实行情，因此按错误处理。
+
+**两个行情源的收益率口径统一。** 中金所日行情的 `daily_return` 基于前结算价；新浪连续合约补缺时也用上一日结算价（缺失则用收盘价）作为基准，保证不同来源的收益率可比。
+
+**宏观数据用"运行日最新可得一期"。** LPR 可能连续数月不变、发布历史可能滞后，固定回看窗口会漏数据，因此 LPR 取全量历史中不晚于运行日的最新一期。同时 `cn_pmi` 接口返回大写列名（`MONTH`/`PMI010000`），与 `cn_cpi`/`cn_ppi` 不一致，列匹配做了大小写兼容。
+
+**重跑幂等。** 任何一天重跑会先清空该日期的全部原始与派生数据再写入，部分失败的运行不会留下脏数据，下次重跑自动自愈。
+
 ## 当前边界
 
 这个项目是一个研究数据监控底座，因此仍有一些边界：
 
 - 新闻来源目前主要使用 Tushare 财联社接口，覆盖范围取决于接口当天返回内容。
+- 宏观指标的可得性取决于数据源更新进度，记录的是"运行日可知"的最新一期，可能滞后于官方发布。
 - 文本过滤是规则式相关性过滤，后续可以加入更强的语义分类模型。
 - 市场评分是解释性规则，不是预测模型。
 - 当前日报是 Markdown，后续可以扩展成 HTML、仪表盘或可视化图表。
@@ -480,6 +532,6 @@ pytest -q --basetemp .pytest_tmp
 
 ## English Summary
 
-Bond Futures Real-Data Monitor is a daily monitoring pipeline for Chinese Treasury bond futures research. It collects real market data, yield-curve data, funding rates, and policy/news text from AKShare and Tushare, then cleans, stores, structures, scores, and reports the results.
+Bond Futures Real-Data Monitor is a daily monitoring pipeline for Chinese Treasury bond futures research. It collects real market data, yield-curve data, funding rates, PBOC open-market operations, policy/news text, and macro fundamentals (LPR/CPI/PPI/PMI) from AKShare and Tushare, then cleans, stores, structures, scores, and reports the results.
 
 The production pipeline does not use sample, mock, or fake fallback data. If live-data coverage is incomplete, the run fails fast and records the reason.
