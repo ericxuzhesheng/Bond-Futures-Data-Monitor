@@ -31,7 +31,9 @@ def test_collectors_reject_disabled_live_data():
 
 def test_tushare_collectors_require_token(monkeypatch):
     monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
-    for collector in [collect_bond_yields, collect_funding_rates, collect_policy_news]:
+    # collect_bond_yields falls back to AkShare when Tushare token is absent,
+    # so it no longer raises on missing token.
+    for collector in [collect_funding_rates, collect_policy_news]:
         with pytest.raises(RuntimeError, match="TUSHARE_TOKEN"):
             collector(RUN_DATE, use_live_data=True)
 

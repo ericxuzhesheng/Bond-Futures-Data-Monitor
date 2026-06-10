@@ -21,12 +21,19 @@ MAX_PLAUSIBLE_YIELD = 15.0
 
 
 def collect_bond_yields(run_date: str, use_live_data: bool = True) -> list[dict[str, object]]:
-    """Collect real China government bond yield-curve data from Tushare."""
+    """Collect real China government bond yield-curve data.
+
+    Tries Tushare yc_cb first; falls back to AkShare bond_china_yield on failure.
+    """
 
     if not use_live_data:
         raise RuntimeError("Sample data is disabled; bond yields must come from a live source.")
 
-    rows = _collect_tushare(run_date)
+    try:
+        rows = _collect_tushare(run_date)
+    except RuntimeError:
+        rows = _collect_akshare(run_date)
+
     available = {row["tenor"] for row in rows}
     required = set(REQUIRED_TENORS.values())
     if available != required:
@@ -64,6 +71,49 @@ def _collect_tushare(run_date: str) -> list[dict[str, object]]:
         rows = _rows_from_curve(df, run_date, query_date)
         if rows:
             return rows
+    return []
+
+
+def _collect_akshare(run_date: str) -> list[dict[str, object]]:
+    try:
+        import akshare as ak  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("AkShare is required as yield curve fallback.") from exc
+
+    target = Date.fromisoformat(run_date)
+    for offset in range(0, 10):
+        query_date = target - timedelta(days=offset)
+        date_str = query_date.strftime("%Y%m%d")
+        date_fmt = query_date.strftime("%Y-%m-%d")
+        try:
+            df = ak.bond_china_yield(start_date=date_str, end_date=date_str)
+        except Exception:
+            continue
+        if df is None or df.empty:
+            continue
+        cgb = df[df["曲线名称"] == "中债国债收益率曲线"]
+        if cgb.empty:
+            continue
+        row = cgb.iloc[0]
+        # AkShare has no 2Y tenor; interpolate linearly from 1Y and 3Y.
+        y1 = float(row["1年"])
+        y3 = float(row["3年"])
+        tenor_map = {
+            "1Y": y1,
+            "2Y": (y1 + y3) / 2,
+            "5Y": float(row["5年"]),
+            "10Y": float(row["10年"]),
+            "30Y": float(row["30年"]),
+        }
+        return [
+            {
+                "date": run_date,
+                "tenor": tenor,
+                "yield_value": _validated_yield(tenor, value),
+                "data_source": f"akshare_bond_china_yield:{date_fmt}",
+            }
+            for tenor, value in tenor_map.items()
+        ]
     return []
 
 
