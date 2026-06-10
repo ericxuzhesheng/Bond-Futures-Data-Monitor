@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from bond_futures_monitor.ai.text_signal import classify_news_item
 from bond_futures_monitor.collectors.funding import collect_funding_rates
 from bond_futures_monitor.collectors.futures import collect_futures_quotes
+from bond_futures_monitor.collectors.macro import collect_macro_indicators
 from bond_futures_monitor.collectors.open_market import collect_open_market_operations
 from bond_futures_monitor.collectors.policy_news import collect_policy_news
 from bond_futures_monitor.collectors.yield_curve import collect_bond_yields
@@ -22,6 +23,7 @@ from bond_futures_monitor.database import (
     insert_bond_yields,
     insert_funding_rates,
     insert_futures_quotes,
+    insert_macro_indicators,
     insert_open_market_operations,
     insert_policy_news,
     log_run,
@@ -105,6 +107,7 @@ def run_daily_pipeline(conn, run_date: str, use_live_data: bool, reports_output_
     insert_funding_rates(conn, collect_funding_rates(run_date, use_live_data))
     insert_open_market_operations(conn, collect_open_market_operations(run_date, use_live_data))
     insert_policy_news(conn, collect_policy_news(run_date, use_live_data))
+    insert_macro_indicators(conn, collect_macro_indicators(run_date, use_live_data))
     validate_real_data_coverage(conn, run_date)
 
     for row in fetch_policy_news(conn, run_date):

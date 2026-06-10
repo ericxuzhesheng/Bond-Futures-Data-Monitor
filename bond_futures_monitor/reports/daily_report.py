@@ -18,6 +18,7 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         (run_date,),
     ).fetchall()
     news = conn.execute("SELECT * FROM policy_news WHERE date = ? ORDER BY id", (run_date,)).fetchall()
+    macro = conn.execute("SELECT * FROM macro_indicators WHERE date = ? ORDER BY indicator", (run_date,)).fetchall()
     ai = conn.execute(
         """
         SELECT signal.*, news.title AS news_title, news.source AS news_source
@@ -49,7 +50,7 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     data_sources = feature_details.get("data_sources", {})
     db_status = _database_write_status(conn, run_date)
 
-    raw_count = len(futures) + len(yields) + len(funding) + len(omo) + len(news)
+    raw_count = len(futures) + len(yields) + len(funding) + len(omo) + len(news) + len(macro)
     lines = [
         f"# 中国国债期货每日真实数据监控报告 - {run_date}",
         "",
@@ -63,6 +64,7 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         f"- 资金利率：{len(funding)} 条",
         f"- 公开市场操作：{len(omo)} 条",
         f"- 政策/新闻文本：{len(news)} 条",
+        f"- 宏观基本面指标：{len(macro)} 条",
         f"- 当日真实数据合计：{raw_count} 条",
         "- 生产流程禁止非真实数据；覆盖不足会直接失败。",
         "",
@@ -93,6 +95,14 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
 
     lines.extend(["", "## 资金面概览", "| 指标 | 利率 |", "|---|---:|"])
     lines.extend(f"| {row['rate_name']} | {row['rate_value']:.3f}% |" for row in funding)
+
+    lines.extend(["", "## 宏观基本面概览", "| 指标 | 数值 | 数据期 |", "|---|---:|---|"])
+    lines.extend(
+        f"| {_macro_indicator_label(row['indicator'])} | {row['value']:.2f}{_macro_unit(row['indicator'])} | "
+        f"{row['period']} |"
+        for row in macro
+    )
+    lines.append("- 宏观指标按月度/不定期发布，记录的是运行日可得的最新一期数据。")
 
     lines.extend(
         [
@@ -151,6 +161,7 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
             f"- funding_rates: {db_status['funding_rates']} rows",
             f"- open_market_operations: {db_status['open_market_operations']} rows",
             f"- policy_news: {db_status['policy_news']} rows",
+            f"- macro_indicators: {db_status['macro_indicators']} rows",
             f"- ai_text_signals: {db_status['ai_text_signals']} rows",
             f"- daily_features: {db_status['daily_features']} row",
             f"- daily_market_signals: {db_status['daily_market_signals']} row",
@@ -181,6 +192,7 @@ def _database_write_status(conn: sqlite3.Connection, run_date: str) -> dict[str,
         "funding_rates",
         "open_market_operations",
         "policy_news",
+        "macro_indicators",
         "ai_text_signals",
         "daily_features",
         "daily_market_signals",
@@ -235,6 +247,20 @@ def _operation_type_label(value: str) -> str:
     }.get(value, value)
 
 
+def _macro_indicator_label(value: str) -> str:
+    return {
+        "LPR_1Y": "LPR 1年期",
+        "LPR_5Y": "LPR 5年期以上",
+        "CPI_YOY": "CPI 同比",
+        "PPI_YOY": "PPI 同比",
+        "PMI_MFG": "制造业 PMI",
+    }.get(value, value)
+
+
+def _macro_unit(value: str) -> str:
+    return "" if value == "PMI_MFG" else "%"
+
+
 def _format_tenor(value) -> str:
     if value is None:
         return "缺失"
@@ -256,6 +282,12 @@ def _feature_panel_rows(feature_groups: dict) -> list[str]:
         "contract_count": "覆盖合约数量",
         "avg_ai_sentiment_score": "文本情绪均值",
         "signal_count": "文本信号数量",
+        "lpr_1y": "LPR 1年期",
+        "lpr_5y": "LPR 5年期以上",
+        "cpi_yoy": "CPI 同比",
+        "ppi_yoy": "PPI 同比",
+        "pmi_mfg": "制造业 PMI",
+        "indicator_count": "宏观指标数量",
     }
     group_labels = {
         "rates": "利率",
@@ -263,6 +295,7 @@ def _feature_panel_rows(feature_groups: dict) -> list[str]:
         "open_market_operations": "公开市场操作",
         "futures": "期货量价",
         "text": "文本",
+        "macro": "宏观基本面",
     }
     rows: list[str] = []
     for group, values in feature_groups.items():
@@ -280,6 +313,7 @@ def _data_source_rows(data_sources: dict) -> list[str]:
         "funding": "资金利率",
         "open_market_operations": "公开市场操作",
         "policy_news": "政策/新闻",
+        "macro": "宏观基本面",
     }
     rows = []
     for key, values in data_sources.items():
