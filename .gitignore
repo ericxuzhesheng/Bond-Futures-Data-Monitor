@@ -4,9 +4,12 @@ __pycache__/
 .pytest_tmp/
 .venv/
 .env
-data/
+# The production SQLite database is version-controlled for reliable cross-day
+# history (see .github/workflows/daily-report.yml). Ignore everything else under
+# data/ (transient files) but keep the canonical database tracked.
+data/*
+!data/bond_futures_monitor.db
 reports_output/
 logs/
-*.db
 .claude/settings.local.json
 .claude/scheduled_tasks.lock

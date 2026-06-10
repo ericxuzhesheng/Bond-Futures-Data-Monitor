@@ -40,18 +40,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # The SQLite database is gitignored, so without a cache every CI run
-      # starts from an empty database and all cross-day features (yield/DR007
-      # changes, volume changes) are unscored. Restore the most recent cache
-      # so the run sees prior trading days' history.
-      - name: Restore database cache
-        uses: actions/cache/restore@v4
-        with:
-          path: data
-          key: bond-futures-db-${{ github.run_id }}
-          restore-keys: |
-            bond-futures-db-
-
       - name: Resolve run date
         shell: bash
         run: |
@@ -72,24 +60,26 @@ jobs:
       - name: Run tests
         run: pytest
 
-      # Save the updated database under a unique key; the next run restores
-      # the newest cache via the restore-keys prefix match above.
-      - name: Save database cache
-        if: success()
-        uses: actions/cache/save@v4
-        with:
-          path: data
-          key: bond-futures-db-${{ github.run_id }}
-
-      - name: Commit report
+      # The SQLite database is version-controlled (see .gitignore), so each run
+      # commits the updated database alongside the report. This gives reliable
+      # cross-day history without depending on the GitHub Actions cache, which
+      # is evicted after 7 days of inactivity or when the repo cache exceeds
+      # its size limit.
+      - name: Commit report and database
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f "reports_output/${RUN_DATE}_daily_report.md"
+          git add data/bond_futures_monitor.db
           if git diff --cached --quiet; then
-            echo "No report changes to commit."
+            echo "No changes to commit."
           else
             git commit -m "report: update daily bond futures report ${RUN_DATE}"
-            git push
+            # A scheduled run can race a manual push to main. The database is a
+            # binary snapshot, so rebase (not merge) onto the latest main and
+            # retry once before failing.
+            git pull --rebase origin "${GITHUB_REF_NAME}" \
+              && git push \
+              || (git pull --rebase origin "${GITHUB_REF_NAME}" && git push)
           fi
