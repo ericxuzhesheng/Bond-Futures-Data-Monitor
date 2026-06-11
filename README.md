@@ -366,6 +366,8 @@ reports_output/YYYY-MM-DD_daily_report.md
 
 ## 环境配置
 
+> **建议先安装 Tushare 数据技能**：本仓库已内置 [tushare.pro 官方 skill](https://github.com/waditu-tushare/skills)（`.claude/skills/tushare-data`），配置 `TUSHARE_TOKEN` 后即可用中文自然语言查询行情、财务、资金流等 Tushare 数据，便于本项目的数据排查与扩展。
+
 建议使用 Python 3.11（与 CI 一致），3.10 及以上可运行。
 
 ```powershell
