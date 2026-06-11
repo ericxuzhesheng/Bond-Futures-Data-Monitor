@@ -422,6 +422,11 @@ python -m bond_futures_monitor.cli run --date 2026-06-08
 python -m bond_futures_monitor.cli generate-report --date 2026-06-08
 ```
 
+`run` 与 `generate-report` 均输出两类文件到 `reports_output/`：
+
+- `{date}_daily_report.md` — 当日 Markdown 日报；
+- `daily_features.csv` — 累计特征时间序列（每天一行：跨日特征、各维度得分、综合评分与市场观点），每次运行从数据库全量重建，可直接导入 Excel/pandas 做时序分析。
+
 ## 自动调度
 
 ### GitHub Actions
@@ -429,10 +434,10 @@ python -m bond_futures_monitor.cli generate-report --date 2026-06-08
 仓库已配置每日 workflow：
 
 ```yaml
-cron: "1 11 * * *"
+cron: "1 11 * * 1-5"
 ```
 
-这对应北京时间每天 19:01。
+这对应北京时间工作日每天 19:01。
 
 GitHub Actions 运行前需要在仓库 Secrets 中配置：
 
@@ -442,16 +447,29 @@ TUSHARE_TOKEN
 
 workflow 会执行：
 
-1. 拉取仓库。
+1. 拉取仓库（自带版本控制的 SQLite 数据库，含全部历史）。
 2. 安装依赖。
-3. 恢复数据库缓存（`actions/cache`，按前缀匹配最近一次）。
-4. 解析运行日期。
-5. 执行每日监控流程。
-6. 运行测试。
-7. 保存更新后的数据库缓存。
-8. 提交更新后的日报。
+3. 解析运行日期。
+4. 执行每日监控流程。
+5. 运行测试。
+6. 提交更新后的日报、特征时间序列 CSV 和数据库。
 
-数据库文件本身不入库（gitignore），通过 Actions cache 在每日运行之间传递。这样 CI 上也能看到前几个交易日的历史，跨日特征（收益率变化、DR007 变化、量能变化）不会因为每次从空库启动而无法计分。
+数据库文件直接纳入 git 版本控制（`data/bond_futures_monitor.db`，在 `.gitattributes` 中标记为二进制）。每次 CI checkout 即获得完整的前期交易日历史，跨日特征（收益率变化、DR007 变化、量能变化）始终可计分，不依赖任何外部缓存。
+
+### 阿里云 ECS 一键部署
+
+在一台全新的 ECS（Ubuntu / Alibaba Cloud Linux）上：
+
+```bash
+export TUSHARE_TOKEN=你的token
+export REPO_URL=https://<用户名>:<PAT>@github.com/<用户名>/Bond-Futures-Data-Monitor.git
+git clone "$REPO_URL" /opt/bond-futures-monitor
+bash /opt/bond-futures-monitor/deploy/aliyun_deploy.sh
+```
+
+脚本会自动完成：安装 docker/git（阿里云镜像源）→ 写入 `.env` → 用阿里云 PyPI 镜像构建镜像 → 注册工作日 19:05（北京时间）的 cron。每日运行由 `deploy/run_daily.sh` 承担：拉最新代码与数据库 → 容器内跑流水线 → 提交日报 + CSV + 数据库并推送。
+
+> **注意**：ECS cron 与 GitHub Actions schedule 只能开一个，否则两边同时向 main 推送会产生竞争。切到 ECS 后请注释掉 workflow 中的 `schedule` 块（`workflow_dispatch` 手动触发可保留）。
 
 ### Windows Task Scheduler
 

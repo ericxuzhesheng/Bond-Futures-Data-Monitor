@@ -1,3 +1,6 @@
 # The production SQLite database is a binary blob; never attempt text diff or
 # three-way merge on it. Each daily run commits a fresh snapshot.
 data/bond_futures_monitor.db binary
+
+# Shell scripts run on Linux (ECS/CI); never let Windows checkouts turn them CRLF.
+*.sh text eol=lf

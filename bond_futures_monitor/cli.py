@@ -33,6 +33,7 @@ from bond_futures_monitor.database import (
     upsert_daily_market_signal,
 )
 from bond_futures_monitor.features.daily_features import build_daily_features
+from bond_futures_monitor.reports.csv_export import export_features_csv
 from bond_futures_monitor.reports.daily_report import generate_daily_report
 from bond_futures_monitor.signals.rule_based import generate_market_signal
 from bond_futures_monitor.validation import validate_real_data_coverage
@@ -78,8 +79,10 @@ def main(argv: list[str] | None = None) -> int:
                 run_daily_pipeline(conn, args.date, settings.use_live_data, settings.reports_output_dir)
                 log_run(conn, args.date, "success", "Daily real-data pipeline completed")
                 generate_daily_report(conn, args.date, settings.reports_output_dir)
+                csv_path = export_features_csv(conn, settings.reports_output_dir)
                 print(f"每日真实数据监控流程已完成：{args.date}")
                 print(f"日报已生成：{settings.reports_output_dir / f'{args.date}_daily_report.md'}")
+                print(f"特征时间序列已导出：{csv_path}")
                 return 0
             except Exception as exc:
                 # The pipeline purges the run date before refreshing, so a partial
@@ -90,7 +93,9 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "generate-report":
             path = generate_daily_report(conn, args.date, settings.reports_output_dir)
+            csv_path = export_features_csv(conn, settings.reports_output_dir)
             print(f"日报已生成：{path}")
+            print(f"特征时间序列已导出：{csv_path}")
             return 0
 
     return 1
