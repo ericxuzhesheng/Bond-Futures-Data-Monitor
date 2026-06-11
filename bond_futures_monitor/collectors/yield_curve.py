@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import socket
+from contextlib import contextmanager
 from datetime import date as Date
 from datetime import timedelta
 from typing import Any
 
 from bond_futures_monitor.retry import retry_call
 
+
+logger = logging.getLogger(__name__)
 
 REQUIRED_TENORS = {1.0: "1Y", 2.0: "2Y", 5.0: "5Y", 10.0: "10Y", 30.0: "30Y"}
 
@@ -18,6 +23,22 @@ TERM_MATCH_TOLERANCE = 0.01
 # Plausible annualized CGB yield range (percent).
 MIN_PLAUSIBLE_YIELD = 0.0
 MAX_PLAUSIBLE_YIELD = 15.0
+
+# AkShare interfaces accept no timeout argument and have hung for 20+ minutes
+# on a slow endpoint (CI 2026-06-10), so bound every call via the socket default.
+AKSHARE_TIMEOUT_SECONDS = 30
+
+
+@contextmanager
+def _socket_timeout(seconds: int):
+    """Temporarily bound blocking socket reads so a stalled HTTP call fails fast."""
+
+    previous = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(seconds)
+    try:
+        yield
+    finally:
+        socket.setdefaulttimeout(previous)
 
 
 def collect_bond_yields(run_date: str, use_live_data: bool = True) -> list[dict[str, object]]:
@@ -75,10 +96,31 @@ def _collect_tushare(run_date: str) -> list[dict[str, object]]:
 
 
 def _collect_akshare(run_date: str) -> list[dict[str, object]]:
+    """Try AkShare sources in order of reliability for the five required tenors.
+
+    1. bond_china_close_return — China Central Depository curve, all five tenors
+       present natively, ~2s. Primary fallback.
+    2. bond_china_yield — same CCDC data via a different endpoint; 2Y is
+       interpolated from 1Y/3Y. Secondary fallback for endpoint outages.
+
+    bond_zh_us_rate (Eastmoney, cross-provider) is intentionally not used: it
+    lacks the 1Y tenor, and fabricating it would violate the real-data contract.
+    """
+
     try:
-        import akshare as ak  # type: ignore
+        import akshare  # type: ignore  # noqa: F401
     except Exception as exc:
         raise RuntimeError("AkShare is required as yield curve fallback.") from exc
+
+    for collector in (_collect_akshare_close_return, _collect_akshare_china_yield):
+        rows = collector(run_date)
+        if rows:
+            return rows
+    return []
+
+
+def _collect_akshare_close_return(run_date: str) -> list[dict[str, object]]:
+    import akshare as ak  # type: ignore
 
     target = Date.fromisoformat(run_date)
     for offset in range(0, 10):
@@ -86,8 +128,49 @@ def _collect_akshare(run_date: str) -> list[dict[str, object]]:
         date_str = query_date.strftime("%Y%m%d")
         date_fmt = query_date.strftime("%Y-%m-%d")
         try:
-            df = ak.bond_china_yield(start_date=date_str, end_date=date_str)
-        except Exception:
+            with _socket_timeout(AKSHARE_TIMEOUT_SECONDS):
+                df = ak.bond_china_close_return(
+                    symbol="国债", period="1", start_date=date_str, end_date=date_str
+                )
+        except Exception as exc:
+            logger.warning("AkShare bond_china_close_return failed for %s: %s", date_str, exc)
+            continue
+        if df is None or df.empty:
+            continue
+        day = df[df["日期"].astype(str) == date_fmt]
+        terms = day["期限"].astype(float)
+        tenor_map: dict[str, float] = {}
+        for term, tenor in REQUIRED_TENORS.items():
+            matched = day[(terms - term).abs() < TERM_MATCH_TOLERANCE]
+            if not matched.empty:
+                tenor_map[tenor] = float(matched.iloc[0]["到期收益率"])
+        if set(tenor_map) != set(REQUIRED_TENORS.values()):
+            continue
+        return [
+            {
+                "date": run_date,
+                "tenor": tenor,
+                "yield_value": _validated_yield(tenor, value),
+                "data_source": f"akshare_bond_china_close_return:{date_fmt}",
+            }
+            for tenor, value in tenor_map.items()
+        ]
+    return []
+
+
+def _collect_akshare_china_yield(run_date: str) -> list[dict[str, object]]:
+    import akshare as ak  # type: ignore
+
+    target = Date.fromisoformat(run_date)
+    for offset in range(0, 10):
+        query_date = target - timedelta(days=offset)
+        date_str = query_date.strftime("%Y%m%d")
+        date_fmt = query_date.strftime("%Y-%m-%d")
+        try:
+            with _socket_timeout(AKSHARE_TIMEOUT_SECONDS):
+                df = ak.bond_china_yield(start_date=date_str, end_date=date_str)
+        except Exception as exc:
+            logger.warning("AkShare bond_china_yield failed for %s: %s", date_str, exc)
             continue
         if df is None or df.empty:
             continue
