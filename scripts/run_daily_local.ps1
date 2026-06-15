@@ -37,6 +37,13 @@ try {
 
 try {
     $env:PYTHONUNBUFFERED = "1"
+    # Python logs progress/warnings to stderr. Under the script-level
+    # $ErrorActionPreference = "Stop", merging stderr via 2>&1 turns the first
+    # warning line (e.g. the harmless Tushare yc_cb permission notice) into a
+    # terminating error and aborts an otherwise healthy run. Relax the
+    # preference for the child process so the pipeline runs to completion and
+    # $LASTEXITCODE reflects Python's real exit code.
+    $ErrorActionPreference = "Continue"
     & $resolvedPython -m bond_futures_monitor.cli run --date today 2>&1 | ForEach-Object {
         $_ | Out-File -FilePath $logPath -Encoding utf8 -Append
     }
