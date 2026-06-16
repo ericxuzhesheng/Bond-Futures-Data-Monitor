@@ -48,7 +48,16 @@ jobs:
             INPUT_DATE="today"
           fi
           if [ "$INPUT_DATE" = "today" ]; then
-            RUN_DATE=$(TZ=Asia/Shanghai date +%F)
+            # Resolve "today" from the UTC date, not Beijing time. The cron fires
+            # at 11:01 UTC (19:01 Beijing). When GitHub delays the scheduled run
+            # (it routinely does, by hours), a Beijing-based date can roll past
+            # midnight to the next calendar day, which has no market data yet, so
+            # the futures-coverage check aborts the run (this broke 2026-06-15).
+            # The UTC date is stable across any realistic delay (11:01 UTC up to
+            # ~23:59 UTC is the same UTC day) and equals the intended Beijing
+            # trading day for this cron, so it stays correct whether the run is
+            # punctual or hours late.
+            RUN_DATE=$(date -u +%F)
           else
             RUN_DATE="$INPUT_DATE"
           fi
