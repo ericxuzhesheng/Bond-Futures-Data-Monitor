@@ -352,7 +352,7 @@ scripts/            # 本地自动调度脚本
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 复制 `.env.example` 为 `.env`：
@@ -838,7 +838,7 @@ Python 3.11 is recommended (consistent with CI); 3.10+ is supported.
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 Copy `.env.example` to `.env`:

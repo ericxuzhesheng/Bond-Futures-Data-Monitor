@@ -19,7 +19,7 @@ from bond_futures_monitor.database import (
     connect,
     fetch_policy_news,
     init_db,
-    insert_ai_text_signal,
+    insert_ai_text_signals,
     insert_bond_yields,
     insert_funding_rates,
     insert_futures_quotes,
@@ -105,25 +105,28 @@ def run_daily_pipeline(conn, run_date: str, use_live_data: bool, reports_output_
     if not use_live_data:
         raise RuntimeError("USE_LIVE_DATA=0 is not allowed because production output requires real data.")
 
-    purge_daily_data_for_date(conn, run_date)
+    # Keep the previous complete snapshot if any collector, validation, or
+    # downstream calculation fails. The caller can then safely retry the date.
+    with conn:
+        purge_daily_data_for_date(conn, run_date)
 
-    insert_futures_quotes(conn, collect_futures_quotes(run_date, use_live_data))
-    insert_bond_yields(conn, collect_bond_yields(run_date, use_live_data))
-    insert_funding_rates(conn, collect_funding_rates(run_date, use_live_data))
-    insert_open_market_operations(conn, collect_open_market_operations(run_date, use_live_data))
-    insert_policy_news(conn, collect_policy_news(run_date, use_live_data))
-    insert_macro_indicators(conn, collect_macro_indicators(run_date, use_live_data))
-    validate_real_data_coverage(conn, run_date)
+        insert_futures_quotes(conn, collect_futures_quotes(run_date, use_live_data))
+        insert_bond_yields(conn, collect_bond_yields(run_date, use_live_data))
+        insert_funding_rates(conn, collect_funding_rates(run_date, use_live_data))
+        insert_open_market_operations(conn, collect_open_market_operations(run_date, use_live_data))
+        insert_policy_news(conn, collect_policy_news(run_date, use_live_data))
+        insert_macro_indicators(conn, collect_macro_indicators(run_date, use_live_data))
+        validate_real_data_coverage(conn, run_date)
 
-    for row in fetch_policy_news(conn, run_date):
-        insert_ai_text_signal(conn, classify_news_item(dict(row)))
-    purge_superseded_ai_signals_for_date(conn, run_date)
+        signals = [classify_news_item(dict(row)) for row in fetch_policy_news(conn, run_date)]
+        insert_ai_text_signals(conn, signals)
+        purge_superseded_ai_signals_for_date(conn, run_date)
 
-    features = build_daily_features(conn, run_date)
-    upsert_daily_features(conn, features)
+        features = build_daily_features(conn, run_date)
+        upsert_daily_features(conn, features)
 
-    signal = generate_market_signal(features)
-    upsert_daily_market_signal(conn, signal)
+        signal = generate_market_signal(features)
+        upsert_daily_market_signal(conn, signal)
 
 
 def resolve_run_date(value: str) -> str:

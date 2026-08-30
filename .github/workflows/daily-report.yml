@@ -38,7 +38,10 @@ jobs:
           cache: "pip"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest
 
       - name: Resolve run date
         shell: bash
@@ -65,9 +68,6 @@ jobs:
 
       - name: Run daily monitor
         run: python -m bond_futures_monitor.cli run --date "$RUN_DATE"
-
-      - name: Run tests
-        run: pytest
 
       # The SQLite database is version-controlled (see .gitignore), so each run
       # commits the updated database alongside the report. This gives reliable

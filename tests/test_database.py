@@ -1,5 +1,5 @@
 from bond_futures_monitor.config import get_settings
-from bond_futures_monitor.database import connect, init_db, insert_futures_quotes
+from bond_futures_monitor.database import connect, init_db, insert_ai_text_signals, insert_futures_quotes
 
 
 def futures_fixture(date: str = "2026-06-08") -> list[dict[str, object]]:
@@ -44,6 +44,33 @@ def test_duplicate_insert_handling(tmp_path):
     assert first == 4
     assert second == 0
     assert count == 4
+
+
+def test_ai_text_signals_are_inserted_as_a_batch(tmp_path):
+    db_path = tmp_path / "monitor.db"
+    signals = [
+        {
+            "news_id": news_id,
+            "date": "2026-06-08",
+            "event_type": "monetary_policy",
+            "summary": f"signal {news_id}",
+            "bond_impact": "neutral",
+            "affected_maturity": "all",
+            "related_contracts": ["TS", "TF", "T", "TL"],
+            "confidence": 50,
+            "reasoning": "test",
+            "model_name": "rule-based",
+        }
+        for news_id in (1, 2)
+    ]
+
+    with connect(db_path) as conn:
+        init_db(conn)
+        inserted = insert_ai_text_signals(conn, signals)
+        count = conn.execute("SELECT COUNT(*) AS n FROM ai_text_signals").fetchone()["n"]
+
+    assert inserted == 2
+    assert count == 2
 
 
 def test_live_data_is_default(monkeypatch):

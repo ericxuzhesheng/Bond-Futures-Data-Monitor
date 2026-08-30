@@ -259,8 +259,15 @@ def insert_policy_news(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]])
 
 
 def insert_ai_text_signal(conn: sqlite3.Connection, signal: dict[str, Any]) -> int:
-    payload = dict(signal)
-    payload["related_contracts"] = json.dumps(payload["related_contracts"], ensure_ascii=False)
+    return insert_ai_text_signals(conn, [signal])
+
+
+def insert_ai_text_signals(conn: sqlite3.Connection, signals: Iterable[dict[str, Any]]) -> int:
+    payloads = []
+    for signal in signals:
+        payload = dict(signal)
+        payload["related_contracts"] = json.dumps(payload["related_contracts"], ensure_ascii=False)
+        payloads.append(payload)
     return _insert_many(
         conn,
         """
@@ -279,7 +286,7 @@ def insert_ai_text_signal(conn: sqlite3.Connection, signal: dict[str, Any]) -> i
             confidence=excluded.confidence,
             reasoning=excluded.reasoning
         """,
-        [payload],
+        payloads,
     )
 
 
@@ -310,7 +317,6 @@ def upsert_daily_features(conn: sqlite3.Connection, features: dict[str, Any]) ->
         """,
         payload,
     )
-    conn.commit()
 
 
 def upsert_daily_market_signal(conn: sqlite3.Connection, signal: dict[str, Any]) -> None:
@@ -332,7 +338,6 @@ def upsert_daily_market_signal(conn: sqlite3.Connection, signal: dict[str, Any])
         """,
         payload,
     )
-    conn.commit()
 
 
 def log_run(conn: sqlite3.Connection, run_date: str, status: str, message: str) -> None:
@@ -363,7 +368,6 @@ def purge_daily_data_for_date(conn: sqlite3.Connection, run_date: str) -> None:
     conn.execute("DELETE FROM funding_rates WHERE date = ?", (run_date,))
     conn.execute("DELETE FROM open_market_operations WHERE date = ?", (run_date,))
     conn.execute("DELETE FROM macro_indicators WHERE date = ?", (run_date,))
-    conn.commit()
 
 
 def purge_superseded_ai_signals_for_date(conn: sqlite3.Connection, run_date: str) -> None:
@@ -382,7 +386,6 @@ def purge_superseded_ai_signals_for_date(conn: sqlite3.Connection, run_date: str
         """,
         (run_date, run_date),
     )
-    conn.commit()
 
 
 def fetch_policy_news(conn: sqlite3.Connection, date: str) -> list[sqlite3.Row]:
@@ -407,7 +410,6 @@ def fetch_table_for_date(conn: sqlite3.Connection, table: str, date: str) -> lis
 def _insert_many(conn: sqlite3.Connection, sql: str, rows: Iterable[dict[str, Any]]) -> int:
     before = conn.total_changes
     conn.executemany(sql, list(rows))
-    conn.commit()
     return conn.total_changes - before
 
 

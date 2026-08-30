@@ -1,0 +1,7 @@
+pandas>=2.0
+python-dotenv>=1.0
+tushare>=1.4
+# Required live-data dependency for CFFEX Treasury futures quotes.
+akshare>=1.14
+# Optional: enables Claude text analysis. The built-in rule engine remains available.
+anthropic>=0.40
