@@ -1,8 +1,9 @@
-"""Shared Tushare CLS news feed fetcher with per-date caching.
+"""Shared CLS news feed fetcher with per-date caching.
 
 Both the policy-news and open-market-operation collectors consume the same
-``pro.news(src="cls", ...)`` feed for one run date. Caching here ensures the
-Tushare API is hit only once per date per process.
+AkShare's public CLS feed is preferred. Tushare remains a fallback when its
+news permission is available. Caching ensures the upstream feed is hit only
+once per date per process.
 """
 
 from __future__ import annotations
@@ -21,10 +22,56 @@ logger = logging.getLogger(__name__)
 def fetch_cls_news(run_date: str) -> tuple[dict[str, str], ...]:
     """Fetch one day's CLS news items as (title, content, url) dicts."""
 
+    items = _fetch_akshare_cls_news(run_date)
+    if items:
+        return items
+
+    try:
+        return _fetch_tushare_cls_news(run_date)
+    except RuntimeError:
+        logger.warning(
+            "No accessible CLS news source for %s; continuing without text signals.",
+            run_date,
+            exc_info=True,
+        )
+        return ()
+
+
+def _fetch_akshare_cls_news(run_date: str) -> tuple[dict[str, str], ...]:
+    try:
+        import akshare as ak  # type: ignore
+    except Exception:
+        return ()
+
+    try:
+        df = retry_call(
+            lambda: ak.stock_info_global_cls(symbol="全部"),
+            description=f"AkShare CLS news query for {run_date}",
+        )
+    except Exception:
+        logger.warning("AkShare CLS news query failed for %s.", run_date, exc_info=True)
+        return ()
+    if df is None or df.empty or "发布日期" not in df.columns:
+        return ()
+
+    matched = df[df["发布日期"].astype(str) == run_date]
+    return tuple(
+        {
+            "title": str(item.get("标题") or "").strip(),
+            "content": str(item.get("内容") or "").strip(),
+            "url": "",
+            "data_source": f"akshare_cls_telegraph:{run_date}",
+        }
+        for _, item in matched.iterrows()
+    )
+
+
+def _fetch_tushare_cls_news(run_date: str) -> tuple[dict[str, str], ...]:
+
     try:
         import tushare as ts  # type: ignore
     except Exception as exc:
-        raise RuntimeError("Tushare is required for policy/news text.") from exc
+        raise RuntimeError("Tushare is required for policy/news fallback.") from exc
 
     token = os.getenv("TUSHARE_TOKEN")
     if not token:
@@ -50,6 +97,7 @@ def fetch_cls_news(run_date: str) -> tuple[dict[str, str], ...]:
                 "title": str(item.get("title") or "").strip(),
                 "content": str(item.get("content") or "").strip(),
                 "url": str(item.get("url") or ""),
+                "data_source": f"tushare_news_cls:{run_date}",
             }
         )
     return tuple(items)

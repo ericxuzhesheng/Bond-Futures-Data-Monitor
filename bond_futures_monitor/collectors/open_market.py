@@ -14,7 +14,7 @@ OMO_KEYWORDS = ("央行", "人民银行", "公开市场", "逆回购", "净投�
 
 
 def collect_open_market_operations(run_date: str, use_live_data: bool = True) -> list[dict[str, object]]:
-    """Collect and parse real PBOC open-market-operation text from Tushare news.
+    """Collect and parse real PBOC open-market-operation text from CLS news.
 
     OMO is a single text-derived stream: the upstream CLS news feed sometimes
     omits the daily PBOC announcement, and there is no alternate data source for
@@ -83,7 +83,7 @@ def _collect_tushare_news(run_date: str) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     seen_keys: set[tuple[str, int | None]] = set()
     for item in items:
-        parsed_rows = parse_omo_text(run_date, item["title"], item["content"], f"tushare_news_cls:{run_date}")
+        parsed_rows = parse_omo_text(run_date, item["title"], item["content"], item["data_source"])
         for row in parsed_rows:
             key = (str(row["operation_type"]), row["tenor_days"] if isinstance(row["tenor_days"], int) else None)
             if key in seen_keys:

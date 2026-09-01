@@ -5,6 +5,7 @@ from datetime import date as Date
 
 import pytest
 
+import bond_futures_monitor.collectors.macro as macro_module
 from bond_futures_monitor.collectors.macro import (
     _month_offset,
     _validated_value,
@@ -21,10 +22,15 @@ def test_macro_collector_rejects_disabled_live_data():
         collect_macro_indicators(RUN_DATE, use_live_data=False)
 
 
-def test_macro_collector_requires_token(monkeypatch):
+def test_macro_collector_uses_open_source_without_token(monkeypatch):
     monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
-    with pytest.raises(RuntimeError, match="TUSHARE_TOKEN"):
-        collect_macro_indicators(RUN_DATE, use_live_data=True)
+    rows = [
+        {"date": RUN_DATE, "indicator": name, "value": 1.0, "period": "2026-06", "data_source": "akshare:test"}
+        for name in ("LPR_1Y", "LPR_5Y", "CPI_YOY", "PPI_YOY", "PMI_MFG")
+    ]
+    rows[-1]["value"] = 50.0
+    monkeypatch.setattr(macro_module, "_collect_akshare", lambda run_date: rows)
+    assert {row["indicator"] for row in collect_macro_indicators(RUN_DATE)} == macro_module.REQUIRED_INDICATORS
 
 
 def test_validated_value_rejects_implausible_values():

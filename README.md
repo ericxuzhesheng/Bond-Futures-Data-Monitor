@@ -127,7 +127,7 @@ scripts/            # 本地自动调度脚本
 
 #### 国债收益率曲线
 
-收益率曲线是判断利率债环境的核心数据。项目从 Tushare `yc_cb` 获取中国国债收益率曲线。
+收益率曲线是判断利率债环境的核心数据。项目优先尝试 Tushare `yc_cb`，权限不足时使用 AkShare 的中债收益率曲线公开数据。
 
 | 期限 | 研究含义 |
 |---|---|
@@ -146,7 +146,7 @@ scripts/            # 本地自动调度脚本
 
 #### 资金利率
 
-资金面影响债券持仓成本和短端利率预期。项目从 Tushare 获取回购利率和 Shibor。
+资金面影响债券持仓成本和短端利率预期。项目默认通过 AkShare 获取中国外汇交易中心回购定盘利率和公开 Shibor 数据；Tushare 仅作为备用源。
 
 | 指标 | 含义 |
 |---|---|
@@ -179,7 +179,7 @@ scripts/            # 本地自动调度脚本
 
 #### 政策与新闻文本
 
-政策和新闻文本来自 Tushare `news(src="cls")`。由于该接口返回的是全市场新闻，项目额外做了相关性过滤，尽量保留真正与中国利率债、国债期货、财政货币政策、债券供给和银行间资金面相关的内容。
+政策和新闻文本优先来自 AkShare 财联社电报，Tushare `news(src="cls")` 作为备用。项目会过滤全市场噪声，只保留与中国利率债、国债期货、财政货币政策、债券供给和银行间资金面相关的内容；当天没有匹配文本时，该维度按中性处理，不阻断日报。
 
 过滤逻辑分为三层：
 
@@ -191,15 +191,15 @@ scripts/            # 本地自动调度脚本
 
 #### 宏观基本面指标
 
-宏观数据决定利率债的中期趋势背景。项目从 Tushare 获取五个核心指标，记录的是**运行日可得的最新一期发布值**，并在 `period` 字段保留数据期：
+宏观数据决定利率债的中期趋势背景。项目默认从 AkShare 公开源获取五个核心指标，Tushare 作为备用；记录的是**运行日可得的最新一期发布值**，并在 `period` 字段保留数据期：
 
 | 指标 | 来源接口 | 研究含义 |
 |---|---|---|
-| `LPR_1Y` | `shibor_lpr` | 1 年期贷款市场报价利率，政策利率锚 |
-| `LPR_5Y` | `shibor_lpr` | 5 年期以上 LPR，与地产和长端更相关 |
-| `CPI_YOY` | `cn_cpi` | CPI 同比，通胀压力 |
-| `PPI_YOY` | `cn_ppi` | PPI 同比，工业品价格和名义增长 |
-| `PMI_MFG` | `cn_pmi` | 制造业 PMI，景气度与荣枯线对比 |
+| `LPR_1Y` | `macro_china_lpr` | 1 年期贷款市场报价利率，政策利率锚 |
+| `LPR_5Y` | `macro_china_lpr` | 5 年期以上 LPR，与地产和长端更相关 |
+| `CPI_YOY` | `macro_china_cpi` | CPI 同比，通胀压力 |
+| `PPI_YOY` | `macro_china_ppi` | PPI 同比，工业品价格和名义增长 |
+| `PMI_MFG` | `macro_china_pmi` | 制造业 PMI，景气度与荣枯线对比 |
 
 宏观指标按月度或不定期发布，与日频数据天然不同步。项目的处理方式是按运行日落库当时最新值，既保证每日报告有完整宏观背景，也保留了"当时可知"的时点信息，避免未来数据泄漏。
 
@@ -241,8 +241,7 @@ scripts/            # 本地自动调度脚本
 - 必须覆盖 `1Y`、`2Y`、`5Y`、`10Y`、`30Y` 五个收益率期限。
 - 必须覆盖 `DR001`、`DR007`、`R007`、`SHIBOR_ON`、`SHIBOR_7D` 五个资金利率指标。
 - 必须覆盖 `LPR_1Y`、`LPR_5Y`、`CPI_YOY`、`PPI_YOY`、`PMI_MFG` 五个宏观指标。
-- 必须至少解析到 1 条公开市场操作记录。
-- 当天至少有 1 条固定收益相关政策/新闻文本。
+- 公开市场操作和政策新闻允许为空；缺失时对应文本维度按中性处理。
 - 六类原始表合计至少有 5 条真实数据。
 - `data_source` 中不得出现 sample/mock/fake 一类非真实来源标记。
 
@@ -372,7 +371,7 @@ ANTHROPIC_API_KEY=
 | `DATABASE_PATH` | 否 | SQLite 数据库路径 |
 | `REPORTS_OUTPUT_DIR` | 否 | 日报输出目录 |
 | `USE_LIVE_DATA` | 是 | 生产运行要求为 `1` |
-| `TUSHARE_TOKEN` | 是 | 收益率、资金利率和新闻数据需要 |
+| `TUSHARE_TOKEN` | 否 | 可选备用源；AkShare 公开源不可用时尝试 Tushare |
 | `ANTHROPIC_API_KEY` | 否 | 启用 Claude 文本结构化；不填则使用规则引擎 |
 
 本地 `.env` 不会提交到仓库。
@@ -420,7 +419,7 @@ cron: "1 11 * * 1-5"
 
 这对应北京时间工作日每天 19:01。
 
-GitHub Actions 运行前需要在仓库 Secrets 中配置 `TUSHARE_TOKEN`。
+GitHub Actions 无需 Tushare 权限即可运行；如需启用备用源，可在仓库 Secrets 中配置 `TUSHARE_TOKEN`。
 
 workflow 会执行：
 
@@ -466,7 +465,7 @@ powershell -ExecutionPolicy Bypass -File scripts\register_windows_task.ps1
 pytest -q --basetemp .pytest_tmp
 ```
 
-测试覆盖（当前 48 个用例）：采集器在关闭真实数据时必须失败；Tushare 采集器缺少 token 时必须失败；行情字段缺失/NaN 必须报错而非填零；中金所与新浪行情的合并回退逻辑；利率、收益率、宏观指标的合理区间校验；宏观月度数据的最新期选取和大小写列名兼容；新闻相关性过滤和 OMO 文本解析；数据库初始化和去重；真实数据质量闸门；文本结构化 schema；规则评分逻辑；日报生成。
+测试覆盖（当前 57 个用例）：采集器在关闭真实数据时必须失败；无 Tushare 权限时使用公开源；行情字段缺失/NaN 必须报错而非填零；中金所与新浪行情的合并回退逻辑；利率、收益率、宏观指标的合理区间校验；宏观月度数据的最新期选取和大小写列名兼容；新闻相关性过滤和 OMO 文本解析；数据库初始化和去重；真实数据质量闸门；文本结构化 schema；规则评分逻辑；日报生成。
 
 ### 数据质量与工程权衡
 
@@ -488,7 +487,7 @@ pytest -q --basetemp .pytest_tmp
 
 这个项目是一个研究数据监控底座，因此仍有一些边界：
 
-- 新闻来源目前主要使用 Tushare 财联社接口，覆盖范围取决于接口当天返回内容。
+- 新闻优先使用 AkShare 财联社电报，Tushare 为备用；公开源当天没有相关内容时文本维度按中性处理。
 - 宏观指标的可得性取决于数据源更新进度，记录的是"运行日可知"的最新一期，可能滞后于官方发布。
 - 文本过滤是规则式相关性过滤，后续可以加入更强的语义分类模型。
 - 市场评分是解释性规则，不是预测模型。
@@ -613,7 +612,7 @@ If the CFFEX interface does not return all four products, the program falls back
 
 #### Government Bond Yield Curve
 
-The yield curve is the core data for assessing the rates-market environment. The project fetches China government bond yields from Tushare `yc_cb`.
+The yield curve is the core data for assessing the rates-market environment. The project tries Tushare `yc_cb` first and falls back to public CCDC curve data exposed by AkShare when permission is unavailable.
 
 | Tenor | Research Meaning |
 |---|---|
@@ -632,7 +631,7 @@ The project computes:
 
 #### Funding Rates
 
-Funding conditions affect bond carrying costs and short-end rate expectations. The project fetches repo rates and Shibor from Tushare.
+Funding conditions affect bond carrying costs and short-end rate expectations. By default, the project uses AkShare to read CFETS repo fixings and public Shibor data; Tushare is only a fallback.
 
 | Indicator | Description |
 |---|---|
@@ -665,7 +664,7 @@ The parsing logic prioritizes keywords such as PBOC, open market, reverse repo, 
 
 #### Policy and News Text
 
-Policy and news text comes from Tushare `news(src="cls")`. Since this interface returns whole-market news, the project applies an additional relevance filter to retain content genuinely related to China rates markets, bond futures, fiscal/monetary policy, bond supply, and interbank funding.
+Policy/news text comes primarily from AkShare's public CLS telegraph feed, with Tushare `news(src="cls")` as a fallback. Whole-market noise is filtered out; when no relevant item is available, the text dimension is scored neutral without blocking the report.
 
 The filtering logic has three layers:
 
@@ -677,15 +676,15 @@ The goal is not to filter as aggressively as possible, but to reduce "seemingly 
 
 #### Macro Fundamentals
 
-Macro data determines the medium-term trend backdrop for rates markets. The project fetches five core indicators from Tushare, recording the **latest published value available as of the run date**, with the `period` field preserving the data vintage:
+Macro data determines the medium-term trend backdrop for rates markets. The project fetches five core indicators from public AkShare sources, with Tushare as a fallback, recording the **latest published value available as of the run date** and preserving the data vintage in `period`:
 
 | Indicator | Source API | Research Meaning |
 |---|---|---|
-| `LPR_1Y` | `shibor_lpr` | 1-year Loan Prime Rate, policy rate anchor |
-| `LPR_5Y` | `shibor_lpr` | 5-year+ LPR, more related to real estate and long end |
-| `CPI_YOY` | `cn_cpi` | CPI year-over-year, inflation pressure |
-| `PPI_YOY` | `cn_ppi` | PPI year-over-year, industrial prices and nominal growth |
-| `PMI_MFG` | `cn_pmi` | Manufacturing PMI, activity vs. expansion/contraction threshold |
+| `LPR_1Y` | `macro_china_lpr` | 1-year Loan Prime Rate, policy rate anchor |
+| `LPR_5Y` | `macro_china_lpr` | 5-year+ LPR, more related to real estate and long end |
+| `CPI_YOY` | `macro_china_cpi` | CPI year-over-year, inflation pressure |
+| `PPI_YOY` | `macro_china_ppi` | PPI year-over-year, industrial prices and nominal growth |
+| `PMI_MFG` | `macro_china_pmi` | Manufacturing PMI, activity vs. expansion/contraction threshold |
 
 Macro indicators are released monthly or irregularly, naturally asynchronous with daily data. The project records the latest value available as of the run date, ensuring each daily report has complete macro context while preserving point-in-time ("known at the time") information and avoiding look-ahead bias.
 
@@ -727,8 +726,7 @@ Current requirements:
 - Must cover `1Y`, `2Y`, `5Y`, `10Y`, `30Y`—all five yield tenors.
 - Must cover `DR001`, `DR007`, `R007`, `SHIBOR_ON`, `SHIBOR_7D`—all five funding rate indicators.
 - Must cover `LPR_1Y`, `LPR_5Y`, `CPI_YOY`, `PPI_YOY`, `PMI_MFG`—all five macro indicators.
-- Must parse at least 1 open-market operation record.
-- Must have at least 1 fixed-income-related policy/news text for the day.
+- OMO and policy/news rows may be empty; their text-derived dimensions are scored neutral when unavailable.
 - Six raw tables combined must have at least 5 real data records.
 - `data_source` must not contain sample/mock/fake or similar non-live source tags.
 
@@ -858,7 +856,7 @@ Parameter reference:
 | `DATABASE_PATH` | No | SQLite database path |
 | `REPORTS_OUTPUT_DIR` | No | Daily report output directory |
 | `USE_LIVE_DATA` | Yes | Must be `1` for production runs |
-| `TUSHARE_TOKEN` | Yes | Required for yield, funding rate, and news data |
+| `TUSHARE_TOKEN` | No | Optional fallback when an AkShare public source is unavailable |
 | `ANTHROPIC_API_KEY` | No | Enables Claude text structuring; omit to use the rule engine |
 
 The local `.env` is not committed to the repository.
@@ -906,7 +904,7 @@ cron: "1 11 * * 1-5"
 
 This corresponds to 19:01 Beijing time on weekdays.
 
-GitHub Actions requires `TUSHARE_TOKEN` configured in repository Secrets.
+GitHub Actions can run without Tushare permissions. Configure `TUSHARE_TOKEN` in repository Secrets only to enable the optional fallback.
 
 The workflow executes:
 
@@ -952,7 +950,7 @@ Run all tests:
 pytest -q --basetemp .pytest_tmp
 ```
 
-Test coverage (currently 48 cases): collectors must fail when live data is disabled; Tushare collectors must fail without a token; missing/NaN quote fields must raise errors rather than filling zeros; CFFEX and Sina quote merge fallback logic; reasonable-range validation for rates, yields, and macro indicators; latest-period selection and case-insensitive column matching for monthly macro data; news relevance filtering and OMO text parsing; database initialization and deduplication; live-data quality gate; text structuring schema; rule-based scoring logic; daily report generation.
+Test coverage (currently 57 cases): collectors must fail when live data is disabled; public sources must work without Tushare permissions; missing/NaN quote fields must raise errors rather than filling zeros; CFFEX and Sina quote merge fallback logic; reasonable-range validation for rates, yields, and macro indicators; latest-period selection and case-insensitive column matching for monthly macro data; news relevance filtering and OMO text parsing; database initialization and deduplication; live-data quality gate; text structuring schema; rule-based scoring logic; daily report generation.
 
 ### Data Quality and Engineering Trade-offs
 
@@ -974,7 +972,7 @@ Real data-source issues encountered during development, and the corresponding de
 
 This project is a research data monitoring foundation, so certain boundaries remain:
 
-- News sourcing currently relies primarily on the Tushare CLS interface; coverage depends on what the interface returns on a given day.
+- News sourcing prefers AkShare's public CLS feed with Tushare as fallback; the text dimension is neutral when no relevant item is available.
 - Macro indicator availability depends on data-source update progress; the recorded value is the "latest known as of run date" and may lag official publication.
 - Text filtering is rule-based relevance filtering; stronger semantic classification models can be added later.
 - Market scoring is an explanatory rule framework, not a predictive model.

@@ -67,7 +67,8 @@ def export_features_csv(conn: sqlite3.Connection, output_dir: Path) -> Path:
     path = output_dir / CSV_FILENAME
     # utf-8-sig so Excel (the most common consumer) renders Chinese values correctly.
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
-        writer = csv.writer(handle)
+        # Keep git diffs stable across Windows development and Linux CI.
+        writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(header)
         for row in rows:
             writer.writerow(

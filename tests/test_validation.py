@@ -55,3 +55,12 @@ def test_validate_real_data_coverage_tolerates_missing_omo_rows(tmp_path):
         conn.execute("DELETE FROM open_market_operations WHERE date = ?", (RUN_DATE,))
         conn.commit()
         validate_real_data_coverage(conn, RUN_DATE)
+
+
+def test_validate_real_data_coverage_tolerates_missing_policy_news(tmp_path):
+    with connect(tmp_path / "monitor.db") as conn:
+        init_db(conn)
+        seed_real_source_rows(conn)
+        conn.execute("DELETE FROM policy_news WHERE date = ?", (RUN_DATE,))
+        conn.commit()
+        validate_real_data_coverage(conn, RUN_DATE)

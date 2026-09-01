@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 from datetime import date as Date
 
 from bond_futures_monitor.retry import retry_call
 
 
 REQUIRED_INDICATORS = {"LPR_1Y", "LPR_5Y", "CPI_YOY", "PPI_YOY", "PMI_MFG"}
+
+logger = logging.getLogger(__name__)
 
 # Macro releases are monthly (CPI/PPI/PMI) or change rarely (LPR), so the
 # collector records the latest published value as of the run date and keeps
@@ -27,12 +31,25 @@ PLAUSIBLE_RANGES = {
 
 
 def collect_macro_indicators(run_date: str, use_live_data: bool = True) -> list[dict[str, object]]:
-    """Collect the latest real macro fundamentals from Tushare as of run_date."""
+    """Collect the latest real macro fundamentals, preferring open AkShare sources."""
 
     if not use_live_data:
         raise RuntimeError("Sample data is disabled; macro indicators must come from a live source.")
 
-    rows = _collect_tushare(run_date)
+    try:
+        rows = _collect_akshare(run_date)
+    except RuntimeError:
+        logger.warning("AkShare macro query failed for %s.", run_date, exc_info=True)
+        rows = []
+    missing = REQUIRED_INDICATORS - {str(row["indicator"]) for row in rows}
+    if missing:
+        try:
+            fallback = _collect_tushare(run_date)
+        except RuntimeError:
+            logger.warning("Tushare macro fallback is unavailable for %s.", run_date, exc_info=True)
+        else:
+            existing = {str(row["indicator"]) for row in rows}
+            rows.extend(row for row in fallback if str(row["indicator"]) not in existing)
     available = {row["indicator"] for row in rows}
     if not REQUIRED_INDICATORS.issubset(available):
         raise RuntimeError(
@@ -40,6 +57,84 @@ def collect_macro_indicators(run_date: str, use_live_data: bool = True) -> list[
             f"expected at least {sorted(REQUIRED_INDICATORS)}, got {sorted(available) or 'none'} for {run_date}."
         )
     return rows
+
+
+def _collect_akshare(run_date: str) -> list[dict[str, object]]:
+    try:
+        import akshare as ak  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("AkShare is required for macro-indicator fallback.") from exc
+
+    try:
+        lpr = retry_call(ak.macro_china_lpr, description="AkShare LPR history")
+        cpi = retry_call(ak.macro_china_cpi, description="AkShare CPI history")
+        ppi = retry_call(ak.macro_china_ppi, description="AkShare PPI history")
+        pmi = retry_call(ak.macro_china_pmi, description="AkShare PMI history")
+    except Exception as exc:
+        raise RuntimeError("AkShare macro-indicator query failed.") from exc
+
+    end_date = Date.fromisoformat(run_date)
+    rows = _akshare_lpr_rows(lpr, run_date, end_date)
+    rows.extend(
+        _akshare_monthly_rows(
+            run_date,
+            end_date,
+            (("CPI_YOY", cpi, "全国-同比增长", "cpi"),
+             ("PPI_YOY", ppi, "当月同比增长", "ppi"),
+             ("PMI_MFG", pmi, "制造业-指数", "pmi")),
+        )
+    )
+    return rows
+
+
+def _akshare_lpr_rows(df, run_date: str, end_date: Date) -> list[dict[str, object]]:
+    if df is None or df.empty or "TRADE_DATE" not in df.columns:
+        return []
+    dates = df["TRADE_DATE"].astype(str).str[:10]
+    eligible = df[dates <= end_date.isoformat()]
+    if eligible.empty:
+        return []
+    latest = eligible.assign(_date=dates[dates <= end_date.isoformat()]).sort_values("_date").iloc[-1]
+    period = str(latest["_date"])
+    return [
+        {
+            "date": run_date,
+            "indicator": indicator,
+            "value": _validated_value(indicator, latest[field]),
+            "period": period,
+            "data_source": f"akshare_chinamoney_lpr:{period}",
+        }
+        for indicator, field in (("LPR_1Y", "LPR1Y"), ("LPR_5Y", "LPR5Y"))
+    ]
+
+
+def _akshare_monthly_rows(run_date: str, end_date: Date, specs) -> list[dict[str, object]]:
+    end_month = end_date.strftime("%Y%m")
+    rows: list[dict[str, object]] = []
+    for indicator, df, field, source in specs:
+        if df is None or df.empty or "月份" not in df.columns or field not in df.columns:
+            continue
+        periods = df["月份"].astype(str).map(_akshare_month)
+        eligible = df[periods <= end_month]
+        if eligible.empty:
+            continue
+        latest = eligible.assign(_period=periods[periods <= end_month]).sort_values("_period").iloc[-1]
+        period = str(latest["_period"])
+        rows.append(
+            {
+                "date": run_date,
+                "indicator": indicator,
+                "value": _validated_value(indicator, latest[field]),
+                "period": f"{period[:4]}-{period[4:]}",
+                "data_source": f"akshare_eastmoney_{source}:{period}",
+            }
+        )
+    return rows
+
+
+def _akshare_month(value: str) -> str:
+    match = re.search(r"(\d{4}).*?(\d{1,2})", value)
+    return f"{int(match.group(1)):04d}{int(match.group(2)):02d}" if match else ""
 
 
 def _collect_tushare(run_date: str) -> list[dict[str, object]]:

@@ -26,9 +26,8 @@ def validate_real_data_coverage(conn: sqlite3.Connection, run_date: str) -> None
     # is tolerated (the signal scores it neutral and annotates it) rather than
     # failing the whole run.
 
-    news_count = conn.execute("SELECT COUNT(*) AS n FROM policy_news WHERE date = ?", (run_date,)).fetchone()["n"]
-    if news_count < 1:
-        checks.append("policy_news: expected at least 1 fixed-income policy/news item, got 0")
+    # Policy/news is an optional text signal. Public feeds may carry no relevant
+    # item for a day; the rule engine then scores this dimension as neutral.
 
     total_rows = sum(
         conn.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE date = ?", (run_date,)).fetchone()["n"]

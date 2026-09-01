@@ -4,7 +4,10 @@ import math
 
 import pytest
 
+import bond_futures_monitor.collectors.funding as funding_module
 import bond_futures_monitor.collectors.futures as futures_module
+import bond_futures_monitor.collectors.open_market as open_market_module
+import bond_futures_monitor.collectors.policy_news as policy_news_module
 from bond_futures_monitor.collectors.funding import _validated_rate, collect_funding_rates
 from bond_futures_monitor.collectors.futures import _require_float, collect_futures_quotes
 from bond_futures_monitor.collectors.open_market import collect_open_market_operations, parse_omo_text
@@ -29,19 +32,21 @@ def test_collectors_reject_disabled_live_data():
             collector(RUN_DATE, use_live_data=False)
 
 
-def test_tushare_collectors_require_token(monkeypatch):
+def test_funding_collector_uses_open_source_without_token(monkeypatch):
     monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
-    # collect_bond_yields falls back to AkShare when Tushare token is absent,
-    # so it no longer raises on missing token.
-    for collector in [collect_funding_rates, collect_policy_news]:
-        with pytest.raises(RuntimeError, match="TUSHARE_TOKEN"):
-            collector(RUN_DATE, use_live_data=True)
+    rows = [
+        {"date": RUN_DATE, "rate_name": name, "rate_value": 1.5, "data_source": "akshare:test"}
+        for name in ("DR001", "DR007", "R007", "SHIBOR_ON", "SHIBOR_7D")
+    ]
+    monkeypatch.setattr(funding_module, "_collect_akshare", lambda run_date: rows)
+    assert {row["rate_name"] for row in collect_funding_rates(RUN_DATE)} == funding_module.REQUIRED_RATE_NAMES
 
 
-def test_open_market_collector_requires_token(monkeypatch):
-    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
-    with pytest.raises(RuntimeError, match="TUSHARE_TOKEN"):
-        collect_open_market_operations(RUN_DATE, use_live_data=True)
+def test_text_collectors_tolerate_no_accessible_news(monkeypatch):
+    monkeypatch.setattr(open_market_module, "_collect_tushare_news", lambda run_date: [])
+    monkeypatch.setattr(policy_news_module, "_collect_tushare_news", lambda run_date: [])
+    assert collect_open_market_operations(RUN_DATE, use_live_data=True) == []
+    assert collect_policy_news(RUN_DATE, use_live_data=True) == []
 
 
 def test_parse_omo_text_extracts_operation_maturity_net_and_rate():

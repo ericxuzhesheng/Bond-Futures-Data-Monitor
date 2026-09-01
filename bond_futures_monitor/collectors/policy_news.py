@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from bond_futures_monitor.collectors.news_feed import fetch_cls_news
+
+
+logger = logging.getLogger(__name__)
 
 
 CORE_RATE_TERMS = (
@@ -101,14 +106,18 @@ HIGH_AUTHORITY_ANCHORS = (
 
 
 def collect_policy_news(run_date: str, use_live_data: bool = True) -> list[dict[str, object]]:
-    """Collect real policy/news text from Tushare news feeds."""
+    """Collect real policy/news text from the shared public CLS feed."""
 
     if not use_live_data:
         raise RuntimeError("Sample data is disabled; policy/news text must come from a live source.")
 
     rows = _collect_tushare_news(run_date)
     if not rows:
-        raise RuntimeError(f"No live policy/news rows matched fixed-income keywords for {run_date}.")
+        logger.warning(
+            "No live policy/news rows matched fixed-income keywords for %s; "
+            "scoring the text dimension as neutral.",
+            run_date,
+        )
     return rows
 
 
@@ -136,7 +145,7 @@ def _collect_tushare_news(run_date: str) -> list[dict[str, object]]:
                 "source": "财联社",
                 "content": content,
                 "url": item["url"],
-                "data_source": f"tushare_news_cls:{run_date}",
+                "data_source": item["data_source"],
             }
         )
         if len(rows) >= 12:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date as Date
 
@@ -10,6 +11,8 @@ from bond_futures_monitor.retry import retry_call
 
 REQUIRED_RATE_NAMES = {"DR001", "DR007", "R007", "SHIBOR_ON", "SHIBOR_7D"}
 
+logger = logging.getLogger(__name__)
+
 # Plausible annualized money-market rate range (percent). Values outside this
 # range indicate a wrong source field or corrupted data, not a real market move.
 MIN_PLAUSIBLE_RATE = 0.0
@@ -17,12 +20,25 @@ MAX_PLAUSIBLE_RATE = 20.0
 
 
 def collect_funding_rates(run_date: str, use_live_data: bool = True) -> list[dict[str, object]]:
-    """Collect real interbank funding-rate data from Tushare."""
+    """Collect real interbank funding rates, preferring open AkShare sources."""
 
     if not use_live_data:
         raise RuntimeError("Sample data is disabled; funding rates must come from a live source.")
 
-    rows = _collect_tushare(run_date)
+    try:
+        rows = _collect_akshare(run_date)
+    except RuntimeError:
+        logger.warning("AkShare funding-rate query failed for %s.", run_date, exc_info=True)
+        rows = []
+    missing = REQUIRED_RATE_NAMES - {str(row["rate_name"]) for row in rows}
+    if missing:
+        try:
+            fallback = _collect_tushare(run_date)
+        except RuntimeError:
+            logger.warning("Tushare funding fallback is unavailable for %s.", run_date, exc_info=True)
+        else:
+            existing = {str(row["rate_name"]) for row in rows}
+            rows.extend(row for row in fallback if str(row["rate_name"]) not in existing)
     available = {row["rate_name"] for row in rows}
     if not REQUIRED_RATE_NAMES.issubset(available):
         raise RuntimeError(
@@ -30,6 +46,68 @@ def collect_funding_rates(run_date: str, use_live_data: bool = True) -> list[dic
             f"expected at least {sorted(REQUIRED_RATE_NAMES)}, got {sorted(available) or 'none'} for {run_date}."
         )
     return rows
+
+
+def _collect_akshare(run_date: str) -> list[dict[str, object]]:
+    """Collect CFETS repo fixings and Shibor without requiring Tushare permissions."""
+
+    try:
+        import akshare as ak  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("AkShare is required for funding-rate fallback.") from exc
+
+    trade_date = Date.fromisoformat(run_date).strftime("%Y%m%d")
+    try:
+        repo = retry_call(
+            lambda: ak.repo_rate_hist(start_date=trade_date, end_date=trade_date),
+            description=f"AkShare CFETS repo fixings for {trade_date}",
+        )
+        shibor = retry_call(
+            ak.macro_china_shibor_all,
+            description=f"AkShare Shibor history for {trade_date}",
+        )
+    except Exception as exc:
+        raise RuntimeError(f"AkShare funding-rate query failed for {trade_date}.") from exc
+
+    rows = _rows_from_akshare_repo(repo, run_date)
+    rows.extend(_rows_from_akshare_shibor(shibor, run_date))
+    return rows
+
+
+def _rows_from_akshare_repo(df, run_date: str) -> list[dict[str, object]]:
+    if df is None or df.empty or "date" not in df.columns:
+        return []
+    matched = df[df["date"].astype(str) == run_date]
+    if matched.empty:
+        return []
+    first = matched.iloc[-1]
+    return [
+        {
+            "date": run_date,
+            "rate_name": rate_name,
+            "rate_value": _validated_rate(rate_name, first[field]),
+            "data_source": f"akshare_chinamoney_repo_rate:{run_date}",
+        }
+        for rate_name, field in (("DR001", "FDR001"), ("DR007", "FDR007"), ("R007", "FR007"))
+    ]
+
+
+def _rows_from_akshare_shibor(df, run_date: str) -> list[dict[str, object]]:
+    if df is None or df.empty or "日期" not in df.columns:
+        return []
+    matched = df[df["日期"].astype(str) == run_date]
+    if matched.empty:
+        return []
+    first = matched.iloc[-1]
+    return [
+        {
+            "date": run_date,
+            "rate_name": rate_name,
+            "rate_value": _validated_rate(rate_name, first[field]),
+            "data_source": f"akshare_jin10_shibor:{run_date}",
+        }
+        for rate_name, field in (("SHIBOR_ON", "O/N-定价"), ("SHIBOR_7D", "1W-定价"))
+    ]
 
 
 def _collect_tushare(run_date: str) -> list[dict[str, object]]:
