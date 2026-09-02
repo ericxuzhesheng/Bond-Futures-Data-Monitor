@@ -83,6 +83,12 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         "## 当日简评",
         "",
     ]
+    rebuilt = conn.execute(
+        "SELECT 1 FROM run_log WHERE run_date=? AND status='success' AND message LIKE 'Historical rebuild%' LIMIT 1",
+        (run_date,),
+    ).fetchone()
+    if rebuilt:
+        lines[-2:-2] = ["> 历史重建版：使用当前规则重算，不代表当日实际发布的判断。", ""]
     lines.extend(_editorial_summary(futures, yields, funding, omo, prior_yields, prior_funding, signal, score_items))
     lines.extend([
         "",
@@ -141,6 +147,11 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         "| 期限 | 收益率 | 较上一观测日 |",
         "|---|---:|---:|",
     ])
+    if any("interpolated_1y_3y" in row["data_source"] for row in yields):
+        lines[-2:-2] = [
+            "*本日采用中债备用曲线；2年期由1年与3年线性插值，并非直接发布值。涉及2年期的利差与蝶式也含插值成分。*",
+            "",
+        ]
     lines.extend(
         f"| {row['tenor']} | {row['yield_value']:.3f}% | "
         f"{_format_bp_change(row['yield_value'], prior_yields.get(row['tenor']))} |" for row in yields
@@ -240,7 +251,7 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     lines.extend(["", "### 历史方向检验", ""])
     lines.extend(_historical_validation(conn, run_date))
     lines.extend(["", "这里按评分正负划分方向，包含尚未达到 ±2 阈值的记录。"
-                  "该结果采用历史存储评分，未统一重算规则版本。", "",
+                  "历史评分受数据覆盖和规则版本影响，不等同于当时实际发布的判断。", "",
                   "### 原始特征", "", "| 分组 | 指标 | 数值 |", "|---|---|---:|"])
     lines.extend(_feature_panel_rows(feature_details.get("feature_groups", {})))
     lines.extend(["", "</details>", "", "<details>", "<summary>展开数据来源、缺项与运行记录</summary>", "",
@@ -362,8 +373,8 @@ def _multi_horizon_rows(conn: sqlite3.Connection, run_date: str) -> list[str]:
     ).fetchall()[::-1]
     if futures:
         values = [float(row["value"]) for row in futures]
-        five = _compound(values[-5:])
-        rows.append(f"| 期货平均收益 | {values[-1]:+.3%} | {values[-1]:+.3%} | {five:+.3%} | {_pct_rank(values):.0%} |")
+        five = f"{_compound(values[-5:]):+.3%}" if len(values) >= 5 else "缺失"
+        rows.append(f"| 期货平均收益 | {values[-1]:+.3%} | {values[-1]:+.3%} | {five} | {_pct_rank(values):.0%} |")
     activity = conn.execute(
         "SELECT date, SUM(volume) AS volume, SUM(open_interest) AS oi FROM futures_quotes WHERE date<=? GROUP BY date ORDER BY date DESC LIMIT 20",
         (run_date,),
@@ -403,15 +414,16 @@ def _futures_position_rows(conn: sqlite3.Connection, run_date: str) -> list[str]
         ).fetchall()[::-1]
         current = history[-1]
         prior = history[-2] if len(history) >= 2 else None
-        baseline = history[:-1] or history
-        avg_volume = sum(float(row["volume"]) for row in baseline) / len(baseline)
-        avg_oi = sum(float(row["open_interest"]) for row in baseline) / len(baseline)
+        baseline = history[:-1]
+        avg_volume = sum(float(row["volume"]) for row in baseline) / len(baseline) if baseline else 0
+        avg_oi = sum(float(row["open_interest"]) for row in baseline) / len(baseline) if baseline else 0
         ret = float(current["daily_return"])
-        oi_change = float(current["open_interest"]) / float(prior["open_interest"]) - 1 if prior else None
+        oi_change = float(current["open_interest"]) / float(prior["open_interest"]) - 1 if prior and prior["open_interest"] > 0 else None
         quadrant = _quadrant(ret, oi_change)
+        volume_ratio = f"{float(current['volume'])/avg_volume:.2f}x" if avg_volume > 0 else "缺失"
+        oi_ratio = f"{float(current['open_interest'])/avg_oi:.2f}x" if avg_oi > 0 else "缺失"
         result.append(
-            f"| {contract} | {ret:+.3%} | {_pct(oi_change)} | {float(current['volume'])/avg_volume:.2f}x | "
-            f"{float(current['open_interest'])/avg_oi:.2f}x | {quadrant} |"
+            f"| {contract} | {ret:+.3%} | {_pct(oi_change)} | {volume_ratio} | {oi_ratio} | {quadrant} |"
         )
     return result or ["| 无 | — | — | — | — | 数据不足 |"]
 

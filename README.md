@@ -942,6 +942,29 @@ powershell -ExecutionPolicy Bypass -File scripts\register_windows_task.ps1
 
 Default time is 19:01 local daily. The task invokes `scripts\run_daily_local.ps1`; run logs are written to the `logs/` directory.
 
+### Historical rebuild
+
+```powershell
+python -m bond_futures_monitor.backfill --year 2026
+```
+
+Rebuilds every CFFEX trading session from January 1 through the latest completed
+19:01 Beijing publication window (never future dates). Reuses stored real market
+and news snapshots, fetches missing quotes/yields/funding, and recomputes macro,
+features, scores and the current report layout in chronological order. Monthly
+macro values are selected by **official NBS publication date**, not merely data
+month. The first report has no prior-year warmup; unavailable comparisons stay blank.
+
+Shared histories and per-day responses are cached under `data/backfill_*` for
+resumption. A SQLite backup is made there before the first rebuild. Failed days
+keep their old database snapshot and are listed in
+`reports_output/backfill_2026_manifest.json`; rerun the same command to retry.
+Historical OMO is supplemented from official PBC notices only when maturity
+records are available. Historical news and optional research fields without stored
+records remain explicitly unavailable, not zero. ChinaBond fallback 2Y yields
+are explicitly labeled as linear interpolation of 1Y/3Y. The yearly report index
+is `reports_output/2026_index.md`. This command does not commit or push files.
+
 ### Testing
 
 Run all tests:

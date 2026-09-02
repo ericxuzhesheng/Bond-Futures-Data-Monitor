@@ -10,6 +10,8 @@ from bond_futures_monitor.collectors.treasury_calendar import parse_treasury_not
 
 
 def test_nbs_release_parsers_cover_regular_transition_and_pmi_wording():
+    assert _indicator_from_title("2025年11月份工业生产者出厂价格环比继续上涨") == "PPI_YOY"
+    assert _indicator_from_title("解读：2025年11月份工业生产者出厂价格环比继续上涨") is None
     assert _indicator_from_title("2026年7月份居民消费价格同比上涨0.5%") == "CPI_YOY"
     assert _period_from_title("2026年7月份居民消费价格同比上涨0.5%") == "2026-07"
     assert _signed_percent("全国居民消费价格同比下降 0.2%") == pytest.approx(-0.2)

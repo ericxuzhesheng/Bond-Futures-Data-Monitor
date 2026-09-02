@@ -41,11 +41,11 @@ def collect_nbs_macro_history_result(run_date: str, periods: int = 6) -> Collect
     return CollectionResult(rows, status, "nbs_official_release", message, observation)
 
 
-def _collect_nbs_macro_history(run_date: str, periods: int) -> list[dict[str, object]]:
+def _collect_nbs_macro_history(run_date: str, periods: int, max_pages: int = 8) -> list[dict[str, object]]:
     target = Date.fromisoformat(run_date)
     session = requests.Session()
     links: dict[str, tuple[str, str]] = {}
-    for page in range(8):
+    for page in range(max_pages):
         url = NBS_LIST_URL if page == 0 else urljoin(NBS_LIST_URL, f"index_{page}.html")
         response = session.get(url, headers=HEADERS, timeout=20)
         response.raise_for_status()
@@ -106,9 +106,9 @@ def _indicators() -> tuple[str, ...]:
 
 
 def _indicator_from_title(title: str) -> str | None:
-    if "居民消费价格" in title and "同比" in title:
+    if re.match(r"\d{4}年\d{1,2}月份?居民消费价格", title):
         return "CPI_YOY"
-    if "工业生产者出厂价格" in title and "同比" in title:
+    if re.match(r"\d{4}年\d{1,2}月份?工业生产者出厂价格", title):
         return "PPI_YOY"
     if "采购经理指数运行情况" in title:
         return "PMI_MFG"
