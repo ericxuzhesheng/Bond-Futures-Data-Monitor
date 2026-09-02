@@ -78,11 +78,15 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
 
     yield_10y_change = _yield_change(conn, run_date, "10Y")
     yield_30y_change = _yield_change(conn, run_date, "30Y")
-    funding_anchor_name = "DR007" if "DR007" in funding else "FDR007" if "FDR007" in funding else None
+    # Prefer the reproducible public fixing history. Keeping DR and FDR as
+    # distinct series avoids resetting the window when weighted quotes appear.
+    funding_anchor_name = "FDR007" if "FDR007" in funding else "DR007" if "DR007" in funding else None
     funding_anchor_change = (
         _rate_change(conn, run_date, funding_anchor_name) if funding_anchor_name is not None else None
     )
-    broad_repo_name = "R007" if "R007" in funding else "FR007" if "FR007" in funding else None
+    broad_repo_name = "FR007" if funding_anchor_name == "FDR007" else "R007"
+    if broad_repo_name not in funding:
+        broad_repo_name = None
     repo_7d_spread = (
         funding[broad_repo_name] - funding[funding_anchor_name]
         if broad_repo_name is not None and funding_anchor_name is not None
@@ -284,6 +288,8 @@ def _rolling_context(conn: sqlite3.Connection, run_date: str, funding_anchor: st
     )
     return {
         "history_days": len(futures_rows),
+        "yield_change_observations": len(yield_changes),
+        "funding_change_observations": len(funding_changes),
         "yield_10y_change_percentile_60d": _percentile_rank(yield_changes),
         "funding_change_percentile_60d": _percentile_rank(funding_changes),
         "futures_return_percentile_20d": _percentile_rank([float(row["avg_return"]) for row in futures_rows]),

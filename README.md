@@ -953,7 +953,12 @@ Rebuilds every CFFEX trading session from January 1 through the latest completed
 and news snapshots, fetches missing quotes/yields/funding, and recomputes macro,
 features, scores and the current report layout in chronological order. Monthly
 macro values are selected by **official NBS publication date**, not merely data
-month. The first report has no prior-year warmup; unavailable comparisons stay blank.
+month. The prior 120 CFFEX trading sessions are loaded first: 60 sessions seed the
+longest rolling window, then 60 sessions produce fully initialized historical
+scores. Warmup sessions are not counted as yearly reports. Missing warmup inputs
+block report regeneration instead of silently publishing underfilled windows.
+Funding scoring consistently prefers the public FDR007 fixing history; weighted
+DR/R quotes remain separately displayed when available, never spliced into FDR/FR.
 
 Shared histories and per-day responses are cached under `data/backfill_*` for
 resumption. A SQLite backup is made there before the first rebuild. Failed days

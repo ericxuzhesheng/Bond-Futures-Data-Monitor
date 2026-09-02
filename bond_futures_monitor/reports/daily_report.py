@@ -323,7 +323,7 @@ def _editorial_summary(futures, yields, funding, omo, prior_yields, prior_fundin
     if "10Y" in yield_map:
         sentence.append(f"10年国债收益率为 {yield_map['10Y']:.3f}%"
                         f"，较上一观测日变化 {_format_bp_change(yield_map['10Y'], prior_yields.get('10Y'))}。")
-    anchor = next((name for name in ("DR007", "FDR007") if name in funding_map), None)
+    anchor = next((name for name in ("FDR007", "DR007") if name in funding_map), None)
     if anchor:
         sentence.append(f"{anchor} 为 {funding_map[anchor]:.3f}%"
                         f"，变化 {_format_bp_change(funding_map[anchor], prior_funding.get(anchor))}。")
@@ -357,7 +357,7 @@ def _multi_horizon_rows(conn: sqlite3.Connection, run_date: str) -> list[str]:
     ).fetchall()[::-1]
     rows.append(_level_horizon_row("10Y国债收益率", yield_series, "%", bp=True))
     anchor_row = conn.execute(
-        "SELECT rate_name FROM funding_rates WHERE date=? AND rate_name IN ('DR007','FDR007') ORDER BY rate_name LIMIT 1",
+        "SELECT rate_name FROM funding_rates WHERE date=? AND rate_name IN ('DR007','FDR007') ORDER BY rate_name DESC LIMIT 1",
         (run_date,),
     ).fetchone()
     if anchor_row:
@@ -718,8 +718,10 @@ def _market_structure_notes(futures, yields, funding, omo, prior_yields, prior_f
             )
         notes.append(f"- 利率曲线：10Y 收益率 {yield_map['10Y']:.3f}%，较上一期 {change}{curve}。")
 
-    anchor = "DR007" if "DR007" in funding_map else "FDR007" if "FDR007" in funding_map else None
-    broad = "R007" if "R007" in funding_map else "FR007" if "FR007" in funding_map else None
+    anchor = "FDR007" if "FDR007" in funding_map else "DR007" if "DR007" in funding_map else None
+    broad = "FR007" if anchor == "FDR007" else "R007"
+    if broad not in funding_map:
+        broad = None
     if anchor:
         change = _format_bp_change(funding_map[anchor], prior_funding.get(anchor))
         spread = (

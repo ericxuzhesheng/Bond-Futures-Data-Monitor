@@ -33,6 +33,8 @@ from bond_futures_monitor.signals.rule_based import generate_market_signal
 from bond_futures_monitor.validation import validate_real_data_coverage
 
 logger = logging.getLogger(__name__)
+ROLLING_SEED_DAYS = 60
+WARMUP_DAYS = 120
 
 
 class Cache:
@@ -93,9 +95,10 @@ def prepare(cache, year, end):
     import akshare as ak
     import tushare as ts
 
-    start = f"{year}-01-01"
+    report_start = f"{year}-01-01"
+    start = f"{year - 1}-01-01"
     pro = ts.pro_api(os.environ["TUSHARE_TOKEN"])
-    calendar = cache.frame("calendar", lambda: pro.trade_cal(
+    calendar = cache.frame("calendar_with_warmup", lambda: pro.trade_cal(
         exchange="CFFEX", start_date=start.replace("-", ""), end_date=end.replace("-", "")))
     observed = set(calendar["cal_date"].astype(str))
     expected = {(date.fromisoformat(start) + timedelta(days=i)).strftime("%Y%m%d")
@@ -105,7 +108,8 @@ def prepare(cache, year, end):
     dates = sorted(f"{d[:4]}-{d[4:6]}-{d[6:8]}" for d in
                    calendar.loc[calendar["is_open"].astype(int) == 1, "cal_date"].astype(str)
                    if start.replace("-", "") <= d <= end.replace("-", ""))
-    shared = {"dates": dates}
+    warmup, dates = split_calendar(dates, report_start)
+    shared = {"dates": dates, "warmup_dates": warmup}
     for contract in CONTRACTS:
         shared[contract] = cache.frame(f"sina_{contract}", lambda c=contract: ak.futures_zh_daily_sina(symbol=f"{c}0"))
     shared["shibor"] = cache.frame("shibor", ak.macro_china_shibor_all)
@@ -113,6 +117,23 @@ def prepare(cache, year, end):
     shared["releases"] = cache.rows("nbs_releases_v2", lambda: _collect_nbs_macro_history(end, periods=16, max_pages=40))
     logger.info("Calendar: %s sessions, %s to %s; NBS: %s releases", len(dates), dates[0], dates[-1], len(shared["releases"]))
     return shared
+
+
+def split_calendar(open_dates, report_start):
+    dates = sorted(set(open_dates))
+    prior = [d for d in dates if d < report_start]
+    reports = [d for d in dates if d >= report_start]
+    if len(prior) < WARMUP_DAYS or not reports:
+        raise RuntimeError(f"Need {WARMUP_DAYS} prior trading sessions and at least one report session")
+    return prior[-WARMUP_DAYS:], reports
+
+
+def validate_history_window(conn, prior_dates):
+    """Check exact calendar sessions, not just a non-null percentile."""
+    if len(prior_dates) < ROLLING_SEED_DAYS:
+        raise RuntimeError("Insufficient warmup calendar")
+    for day in prior_dates[-ROLLING_SEED_DAYS:]:
+        validate_real_data_coverage(conn, day)
 
 
 def month_bounds(run_date, end):
@@ -260,15 +281,16 @@ def collect_missing(conn, cache, shared, run_date):
     if conn.execute("SELECT COUNT(*) FROM bond_yields WHERE date=?", (run_date,)).fetchone()[0] < 5:
         db.insert_bond_yields(conn, historical_yields(cache, shared, run_date))
 
-    if conn.execute("SELECT COUNT(*) FROM funding_rates WHERE date=?", (run_date,)).fetchone()[0] < 5:
+    funding_names = {r[0] for r in conn.execute("SELECT rate_name FROM funding_rates WHERE date=?", (run_date,))}
+    if not {"FDR001", "FDR007", "FR007", "SHIBOR_ON", "SHIBOR_7D"}.issubset(funding_names):
         month_start, month_end = month_bounds(run_date, shared["dates"][-1])
         repo = cache.frame(f"repo_{run_date[:7]}", lambda: ak.repo_rate_hist(
             start_date=month_start.replace("-", ""), end_date=month_end.replace("-", "")))
         rows = _rows_from_akshare_repo(repo, run_date) + _rows_from_akshare_shibor(shared["shibor"], run_date)
-        db.insert_funding_rates(conn, rows)
+        db.insert_funding_rates(conn, [r for r in rows if r["rate_name"] not in funding_names])
 
 
-def rebuild_day(conn, cache, shared, run_date):
+def rebuild_day(conn, cache, shared, run_date, calculate=True):
     with conn:
         collect_missing(conn, cache, shared, run_date)
         db.insert_macro_indicators(conn, macro_rows(shared["releases"], shared["lpr"], run_date))
@@ -290,9 +312,16 @@ def rebuild_day(conn, cache, shared, run_date):
         for table in ("ctd_basis_irr", "treasury_auction_results", "cross_market", "funding_ncd_irs"):
             db.upsert_collection_status(conn, run_date, table, "unavailable", 0, "none", "未取得经验证的历史数据，不作估算")
         validate_real_data_coverage(conn, run_date)
+        if not calculate:
+            return
         db.insert_ai_text_signals(conn, [classify_news_item(dict(r)) for r in db.fetch_policy_news(conn, run_date)])
         db.purge_superseded_ai_signals_for_date(conn, run_date)
         features = build_daily_features(conn, run_date)
+        if shared.get("warmup_dates"):
+            rolling = features["details"]["rolling_context"]
+            if (rolling["yield_change_observations"] != 60 or
+                    rolling["funding_change_observations"] != 60 or rolling["history_days"] != 20):
+                raise RuntimeError(f"Incomplete rolling window on {run_date}: {rolling}")
         db.upsert_daily_features(conn, features)
         db.upsert_daily_market_signal(conn, generate_market_signal(features))
 
@@ -312,21 +341,42 @@ def main(argv=None):
             print(run_date, macro_rows(shared["releases"], shared["lpr"], run_date), flush=True)
         return 0
     manifest = {"year": args.year, "end": end, "expected_dates": shared["dates"], "completed": [], "failed": {},
+                "warmup_dates": shared["warmup_dates"], "warmup_completed": [], "warmup_failed": {},
+                "warmup_seed_sessions": ROLLING_SEED_DAYS,
                 "mode": "reuse real market/news snapshots; rebuild point-in-time macro, features, signals and reports",
                 "optional_limits": "OMO requires official operation/maturity notices; uncached historical news, treasury calendar and curve comparisons remain explicitly unavailable"}
     settings.reports_output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = settings.reports_output_dir / f"backfill_{args.year}_manifest.json"
     with db.connect(settings.database_path) as conn:
-        backup = cache.root / "before_backfill.db"
+        backup = cache.root / "before_warmup_backfill.db"
         if not backup.exists():
             with sqlite3.connect(backup) as dest:
                 conn.backup(dest)
         db.init_db(conn)
-        missing_omo = [d for d in shared["dates"] if not conn.execute(
+        scoring_dates = shared["warmup_dates"][ROLLING_SEED_DAYS:] + shared["dates"]
+        missing_omo = [d for d in scoring_dates if not conn.execute(
             "SELECT 1 FROM open_market_operations WHERE date=?", (d,)).fetchone()]
         shared["omo"] = historical_omo(cache, missing_omo)
+        for index, run_date in enumerate(shared["warmup_dates"]):
+            try:
+                calculate = index >= ROLLING_SEED_DAYS
+                if calculate:
+                    validate_history_window(conn, shared["warmup_dates"][:index])
+                rebuild_day(conn, cache, shared, run_date, calculate=calculate)
+                manifest["warmup_completed"].append(run_date)
+                logger.info("Warmup [%s/%s] %s (%s)", index + 1, WARMUP_DAYS, run_date,
+                            "scored" if calculate else "seed only")
+            except Exception as exc:
+                manifest["warmup_failed"][run_date] = str(exc)
+                logger.exception("Warmup failed %s", run_date)
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        if manifest["warmup_failed"]:
+            logger.error("Warmup incomplete: preserving existing reports; see %s", manifest_path)
+            return 1
+        all_dates = shared["warmup_dates"] + shared["dates"]
         for index, run_date in enumerate(shared["dates"], 1):
             try:
+                validate_history_window(conn, all_dates[:WARMUP_DAYS + index - 1])
                 rebuild_day(conn, cache, shared, run_date)
                 db.log_run(conn, run_date, "success", "Historical rebuild with publication-date macro cutoff")
                 generate_daily_report(conn, run_date, settings.reports_output_dir)
@@ -345,6 +395,7 @@ def main(argv=None):
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     lines = [f"# {args.year} 年国债期货日报", "",
              f"截至 {end}，按中金所交易日历应有 {len(shared['dates'])} 期；本次完成 {len(manifest['completed'])} 期。", "",
+             f"预热覆盖 {shared['warmup_dates'][0]} 至 {shared['warmup_dates'][-1]}，共 {WARMUP_DAYS} 个交易日：前60日初始化，后60日按完整窗口重算评分。预热日不计入2026年日报数量。", "",
              "采用新版排版与当前评分规则回溯重建，不是当年实际发布的版本。月度宏观按官方发布日期截断。", "",
              "未缓存的历史新闻及部分补充数据仍缺失，详见每期附录及 [回跑清单](" + manifest_path.name + ")。", "",
              "部分历史曲线使用中债备用源，2年期为1年与3年线性插值；不能视为直接发布值。", ""]

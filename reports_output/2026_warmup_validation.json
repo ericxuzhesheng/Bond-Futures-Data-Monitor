@@ -1,0 +1,73 @@
+{
+  "scope": {
+    "first": "2026-01-05",
+    "last": "2026-09-01",
+    "reports": 161,
+    "charts": 644,
+    "warmup_start": "2025-07-09",
+    "warmup_end": "2025-12-31"
+  },
+  "before": {
+    "date": "2026-01-05",
+    "missing_level_changes": 4,
+    "missing_rolling_values": 6,
+    "changes": {
+      "yield_10y_change": null,
+      "yield_30y_change": null,
+      "dr007_change": null,
+      "avg_volume_change": null
+    },
+    "rolling": {
+      "history_days": 1,
+      "yield_10y_change_percentile_60d": null,
+      "funding_change_percentile_60d": null,
+      "futures_return_percentile_20d": null,
+      "volume_ratio_20d": null,
+      "open_interest_ratio_20d": null,
+      "open_interest_change_1d": null,
+      "price_oi_quadrant": "数据不足"
+    }
+  },
+  "after": {
+    "date": "2026-01-05",
+    "missing_level_changes": 0,
+    "missing_rolling_values": 0,
+    "changes": {
+      "yield_10y_change": 0.01110000000000011,
+      "yield_30y_change": 0.014800000000000146,
+      "dr007_change": -0.5900000000000001,
+      "avg_volume_change": -0.06992003757677444
+    },
+    "rolling": {
+      "history_days": 20,
+      "yield_change_observations": 60,
+      "funding_change_observations": 60,
+      "yield_10y_change_percentile_60d": 0.9166666666666666,
+      "funding_change_percentile_60d": 0.016666666666666666,
+      "futures_return_percentile_20d": 0.45,
+      "volume_ratio_20d": 0.9156436862304675,
+      "open_interest_ratio_20d": 1.0134315748700249,
+      "open_interest_change_1d": 0.012913553532301746,
+      "price_oi_quadrant": "价跌增仓"
+    }
+  },
+  "pre_report_date_counts": {
+    "futures_quotes": 120,
+    "bond_yields": 120,
+    "funding_rates": 120,
+    "daily_market_signals": 60
+  },
+  "complete_rolling_windows": 221,
+  "future_macro_rows": 0,
+  "missing_optional_dates": {
+    "open_market_operations": 11,
+    "policy_news": 101,
+    "treasury_issuance_calendar": 161,
+    "yield_curve_comparisons": 160
+  },
+  "limitations": [
+    "Historical news and issuance-calendar gaps are not repaired by market-data warmup.",
+    "ChinaBond fallback 2Y is interpolated from 1Y/3Y, not directly published.",
+    "Past score direction checks are in-sample diagnostics, not a trading backtest."
+  ]
+}

@@ -294,3 +294,38 @@ def test_features_label_fdr007_as_the_funding_anchor(tmp_path):
     funding = features["details"]["feature_groups"]["funding"]
     assert funding["funding_anchor_name"] == "FDR007"
     assert funding["repo_7d_spread"] == pytest.approx(0.2)
+
+
+def test_fixing_anchor_does_not_switch_when_weighted_quotes_appear(tmp_path):
+    from bond_futures_monitor.reports.daily_report import _multi_horizon_rows
+    with connect(tmp_path / "monitor.db") as conn:
+        init_db(conn)
+        seed_real_source_rows(conn)
+        insert_funding_rates(conn, [
+            {"date": day, "rate_name": name, "rate_value": value, "data_source": "fixing"}
+            for day, delta in (("2026-06-05", -.01), (RUN_DATE, 0))
+            for name, value in (("FDR007", 1.4 + delta), ("FR007", 1.6 + delta))])
+        features = build_daily_features(conn, RUN_DATE)
+        funding = features["details"]["feature_groups"]["funding"]
+        assert funding["funding_anchor_name"] == "FDR007"
+        assert features["dr007_change"] == pytest.approx(.01)
+        assert funding["repo_7d_spread"] == pytest.approx(.2)
+        assert "DR007" in funding["available_rates"]
+        assert any("| FDR007 |" in row for row in _multi_horizon_rows(conn, RUN_DATE))
+
+
+def test_funding_chart_uses_20_dates_not_100_rows(tmp_path):
+    from datetime import date, timedelta
+    import xml.etree.ElementTree as ET
+    from bond_futures_monitor.reports.charts import _funding_chart
+    with connect(tmp_path / "monitor.db") as conn:
+        init_db(conn)
+        insert_funding_rates(conn, [
+            {"date": (date(2025, 12, 17) + timedelta(days=i)).isoformat(), "rate_name": name,
+             "rate_value": 1.4, "data_source": "test-real-source"}
+            for i in range(20)
+            for name in ("FDR001", "FDR007", "FR007", "SHIBOR_ON", "SHIBOR_7D", "DR001", "DR007", "R007")])
+        path = _funding_chart(conn, "2026-01-05", tmp_path)
+        lines = list(ET.parse(path).iter("{http://www.w3.org/2000/svg}polyline"))
+        assert len(lines) == 5
+        assert all(len(line.attrib["points"].split()) == 20 for line in lines)

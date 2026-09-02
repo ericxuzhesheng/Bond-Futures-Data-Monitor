@@ -33,7 +33,7 @@ def _futures_chart(conn, run_date, asset_dir):
     for row in rows:
         contract = str(row["contract"])
         levels[contract] *= 1 + float(row["daily_return"])
-        grouped[contract].append((str(row["date"])[5:], levels[contract]))
+        grouped[contract].append((str(row["date"]), levels[contract]))
     return _write_line_chart(asset_dir / f"{run_date}_futures_20d.svg", "国债期货累计表现", grouped, "指数")
 
 
@@ -54,14 +54,16 @@ def _curve_chart(conn, run_date, asset_dir):
 
 def _funding_chart(conn, run_date, asset_dir):
     rows = conn.execute(
-        "SELECT date, rate_name, rate_value FROM funding_rates WHERE date <= ? ORDER BY date DESC LIMIT 100",
+        "SELECT date, rate_name, rate_value FROM funding_rates WHERE date IN "
+        "(SELECT DISTINCT date FROM funding_rates WHERE date <= ? ORDER BY date DESC LIMIT 20) "
+        "ORDER BY date DESC, rate_name",
         (run_date,),
     ).fetchall()[::-1]
     wanted = {"DR007", "FDR007", "R007", "FR007", "SHIBOR_7D"}
     grouped: dict[str, list[tuple[str, float]]] = defaultdict(list)
     for row in rows:
         if row["rate_name"] in wanted:
-            grouped[str(row["rate_name"])].append((str(row["date"])[5:], float(row["rate_value"])))
+            grouped[str(row["rate_name"])].append((str(row["date"]), float(row["rate_value"])))
     return _write_line_chart(asset_dir / f"{run_date}_funding_20d.svg", "近20日资金利率分层", grouped, "%")
 
 
