@@ -138,6 +138,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _ensure_column(conn, "daily_features", "omo_net_injection_amount", "REAL")
     _ensure_column(conn, "daily_features", "omo_operation_rate", "REAL")
+    _repair_legacy_repo_fixing_names(conn)
     conn.commit()
 
 
@@ -417,3 +418,24 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_typ
     columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+
+
+def _repair_legacy_repo_fixing_names(conn: sqlite3.Connection) -> None:
+    """Correct AkShare/ChinaMoney fixing rows that were previously mislabeled as DR/R."""
+
+    for old_name, correct_name in (("DR001", "FDR001"), ("DR007", "FDR007"), ("R007", "FR007")):
+        conn.execute(
+            """
+            UPDATE OR IGNORE funding_rates
+            SET rate_name = ?
+            WHERE rate_name = ? AND data_source LIKE 'akshare_chinamoney_repo_rate:%'
+            """,
+            (correct_name, old_name),
+        )
+        conn.execute(
+            """
+            DELETE FROM funding_rates
+            WHERE rate_name = ? AND data_source LIKE 'akshare_chinamoney_repo_rate:%'
+            """,
+            (old_name,),
+        )

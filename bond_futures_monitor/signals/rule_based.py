@@ -73,15 +73,23 @@ def _score_curve(score_items: list[dict[str, Any]], features: dict[str, Any]) ->
 
 def _score_funding(score_items: list[dict[str, Any]], risks: list[str], features: dict[str, Any]) -> None:
     value = features.get("dr007_change")
+    anchor = (
+        features.get("details", {})
+        .get("feature_groups", {})
+        .get("funding", {})
+        .get("funding_anchor_name")
+        or "DR007/FDR007"
+    )
     if value is None:
-        _add_score(score_items, "资金面", 0, "缺少上一交易日 DR007，资金面变化项暂不计分。")
-        risks.append("缺少上一交易日 DR007，资金面变化项暂不计分。")
+        message = f"缺少上一交易日 {anchor}，资金面变化项暂不计分。"
+        _add_score(score_items, "资金面", 0, message)
+        risks.append(message)
     elif value <= -0.03:
-        _add_score(score_items, "资金面", 1, "DR007 下行，银行间资金面边际转松。")
+        _add_score(score_items, "资金面", 1, f"{anchor} 下行，银行间资金面边际转松。")
     elif value >= 0.03:
-        _add_score(score_items, "资金面", -1, "DR007 上行，银行间资金面边际收紧。")
+        _add_score(score_items, "资金面", -1, f"{anchor} 上行，银行间资金面边际收紧。")
     else:
-        _add_score(score_items, "资金面", 0, "DR007 变化未超过方向阈值。")
+        _add_score(score_items, "资金面", 0, f"{anchor} 变化未超过方向阈值。")
 
 
 def _score_omo(score_items: list[dict[str, Any]], features: dict[str, Any]) -> None:

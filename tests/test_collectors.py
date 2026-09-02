@@ -36,17 +36,96 @@ def test_funding_collector_uses_open_source_without_token(monkeypatch):
     monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
     rows = [
         {"date": RUN_DATE, "rate_name": name, "rate_value": 1.5, "data_source": "akshare:test"}
-        for name in ("DR001", "DR007", "R007", "SHIBOR_ON", "SHIBOR_7D")
+        for name in ("FDR001", "FDR007", "FR007", "SHIBOR_ON", "SHIBOR_7D")
     ]
     monkeypatch.setattr(funding_module, "_collect_akshare", lambda run_date: rows)
-    assert {row["rate_name"] for row in collect_funding_rates(RUN_DATE)} == funding_module.REQUIRED_RATE_NAMES
+    collected = collect_funding_rates(RUN_DATE)
+    assert {row["rate_name"] for row in collected} == {
+        "FDR001", "FDR007", "FR007", "SHIBOR_ON", "SHIBOR_7D"
+    }
+
+
+def test_funding_uses_current_repo_csv_when_history_endpoint_breaks(monkeypatch):
+    pd = pytest.importorskip("pandas")
+    ak = pytest.importorskip("akshare")
+    monkeypatch.setattr(funding_module, "retry_call", lambda func, description: func())
+    monkeypatch.setattr(ak, "repo_rate_hist", lambda **kwargs: (_ for _ in ()).throw(KeyError("frValueMap")))
+    monkeypatch.setattr(
+        ak,
+        "repo_rate_query",
+        lambda symbol: pd.DataFrame([{
+            "date": pd.Timestamp(RUN_DATE).date(),
+            **({"FR001": 1.4, "FR007": 1.5, "FR014": 1.6}
+               if symbol == "回购定盘利率"
+               else {"FDR001": 1.3, "FDR007": 1.4, "FDR014": 1.5}),
+        }]),
+    )
+    monkeypatch.setattr(
+        ak,
+        "macro_china_shibor_all",
+        lambda: pd.DataFrame([{"日期": RUN_DATE, "O/N-定价": 1.31, "1W-定价": 1.41}]),
+    )
+    rows = funding_module._collect_akshare(RUN_DATE)
+    assert {row["rate_name"] for row in rows} == {
+        "FDR001", "FDR007", "FR007", "SHIBOR_ON", "SHIBOR_7D"
+    }
 
 
 def test_text_collectors_tolerate_no_accessible_news(monkeypatch):
+    monkeypatch.setattr(open_market_module, "_collect_pbc_official", lambda run_date: [])
     monkeypatch.setattr(open_market_module, "_collect_tushare_news", lambda run_date: [])
     monkeypatch.setattr(policy_news_module, "_collect_tushare_news", lambda run_date: [])
     assert collect_open_market_operations(RUN_DATE, use_live_data=True) == []
     assert collect_policy_news(RUN_DATE, use_live_data=True) == []
+
+
+def test_pbc_notice_links_selects_the_requested_date():
+    html = """
+    <table>
+      <tr><td><a href="/notice/today/index.html">公开市场业务交易公告 [2026]第100号</a>
+      <span>2026-06-08</span></td></tr>
+      <tr><td><a href="/notice/old/index.html">公开市场业务交易公告 [2026]第99号</a>
+      <span>2026-06-05</span></td></tr>
+    </table>
+    """
+    links = open_market_module._pbc_notice_links(html, RUN_DATE)
+    assert links == [
+        (
+            "公开市场业务交易公告 [2026]第100号",
+            "https://www.pbc.gov.cn/notice/today/index.html",
+        )
+    ]
+
+
+def test_official_omo_terms_merge_with_news_maturity():
+    official = [{
+        "date": RUN_DATE, "operation_type": "reverse_repo", "tenor_days": 7,
+        "operation_amount": 100.0, "maturity_amount": 0.0, "net_injection_amount": 100.0,
+        "operation_rate": 1.4, "source_title": "人民银行公告",
+        "data_source": "pbc_official:https://example.test", "_net_complete": False,
+    }]
+    news = [{
+        "date": RUN_DATE, "operation_type": "reverse_repo", "tenor_days": 7,
+        "operation_amount": 90.0, "maturity_amount": 30.0, "net_injection_amount": 60.0,
+        "operation_rate": None, "source_title": "媒体摘要", "data_source": "akshare_cls:test",
+    }]
+    rows = open_market_module._merge_official_and_news_rows(official, news)
+    assert rows[0]["operation_amount"] == 100.0
+    assert rows[0]["maturity_amount"] == 30.0
+    assert rows[0]["net_injection_amount"] == 70.0
+    assert rows[0]["operation_rate"] == 1.4
+    assert rows[0]["data_source"].startswith("pbc_official:")
+
+
+def test_zero_operation_notice_is_not_dropped():
+    rows = open_market_module._parse_zero_operation_notice(
+        RUN_DATE,
+        "公开市场业务交易公告 [2026]第100号",
+        "2026年6月8日7天期逆回购操作量为零。",
+        "pbc_official:https://example.test",
+    )
+    assert rows[0]["tenor_days"] == 7
+    assert rows[0]["operation_amount"] == 0.0
 
 
 def test_parse_omo_text_extracts_operation_maturity_net_and_rate():

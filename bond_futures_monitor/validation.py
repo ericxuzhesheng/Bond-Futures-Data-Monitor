@@ -7,7 +7,9 @@ import sqlite3
 
 REQUIRED_CONTRACTS = {"TS", "TF", "T", "TL"}
 REQUIRED_TENORS = {"1Y", "2Y", "5Y", "10Y", "30Y"}
-REQUIRED_RATE_NAMES = {"DR001", "DR007", "R007", "SHIBOR_ON", "SHIBOR_7D"}
+SHIBOR_RATE_NAMES = {"SHIBOR_ON", "SHIBOR_7D"}
+WEIGHTED_REPO_RATE_NAMES = {"DR001", "DR007", "R007"}
+FIXING_REPO_RATE_NAMES = {"FDR001", "FDR007", "FR007"}
 REQUIRED_MACRO_INDICATORS = {"LPR_1Y", "LPR_5Y", "CPI_YOY", "PPI_YOY", "PMI_MFG"}
 
 
@@ -18,13 +20,12 @@ def validate_real_data_coverage(conn: sqlite3.Connection, run_date: str) -> None
     checks = [
         _coverage_check(conn, "futures_quotes", "contract", run_date, REQUIRED_CONTRACTS),
         _coverage_check(conn, "bond_yields", "tenor", run_date, REQUIRED_TENORS),
-        _coverage_check(conn, "funding_rates", "rate_name", run_date, REQUIRED_RATE_NAMES),
+        _funding_coverage_check(conn, run_date),
         _coverage_check(conn, "macro_indicators", "indicator", run_date, REQUIRED_MACRO_INDICATORS),
     ]
-    # OMO is a single text-derived stream with no alternate source; the upstream
-    # news feed occasionally omits the daily PBOC announcement. A missing OMO row
-    # is tolerated (the signal scores it neutral and annotates it) rather than
-    # failing the whole run.
+    # PBC pages or their historical maturity notice can occasionally be
+    # unreachable. A missing OMO row is tolerated and scored neutral rather
+    # than failing otherwise complete market data.
 
     # Policy/news is an optional text signal. Public feeds may carry no relevant
     # item for a day; the rule engine then scores this dimension as neutral.
@@ -61,6 +62,23 @@ def _coverage_check(
     if missing:
         return f"{table}.{field}: missing {missing}; available {sorted(available) or 'none'}"
     return ""
+
+
+def _funding_coverage_check(conn: sqlite3.Connection, run_date: str) -> str:
+    rows = conn.execute(
+        "SELECT DISTINCT rate_name FROM funding_rates WHERE date = ?",
+        (run_date,),
+    ).fetchall()
+    available = {str(row["rate_name"]) for row in rows}
+    missing_shibor = SHIBOR_RATE_NAMES - available
+    has_repo_set = WEIGHTED_REPO_RATE_NAMES.issubset(available) or FIXING_REPO_RATE_NAMES.issubset(available)
+    if not missing_shibor and has_repo_set:
+        return ""
+    return (
+        "funding_rates.rate_name: expected "
+        f"{sorted(SHIBOR_RATE_NAMES)} plus either {sorted(WEIGHTED_REPO_RATE_NAMES)} "
+        f"or {sorted(FIXING_REPO_RATE_NAMES)}; available {sorted(available) or 'none'}"
+    )
 
 
 def _assert_no_sample_sources(conn: sqlite3.Connection, run_date: str) -> None:

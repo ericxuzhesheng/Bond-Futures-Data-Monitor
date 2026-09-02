@@ -4,37 +4,208 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date as Date, timedelta
+from urllib.parse import urljoin
 
 from bond_futures_monitor.collectors.news_feed import fetch_cls_news
+from bond_futures_monitor.retry import retry_call
 
 
 logger = logging.getLogger(__name__)
 
 OMO_KEYWORDS = ("央行", "人民银行", "公开市场", "逆回购", "净投放", "净回笼", "到期")
+PBC_OMO_LIST_URL = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html"
+PBC_OMO_HISTORY_URL = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/17081-{page}.html"
 
 
 def collect_open_market_operations(run_date: str, use_live_data: bool = True) -> list[dict[str, object]]:
-    """Collect and parse real PBOC open-market-operation text from CLS news.
+    """Collect PBC operations, deriving maturities from earlier official notices.
 
-    OMO is a single text-derived stream: the upstream CLS news feed sometimes
-    omits the daily PBOC announcement, and there is no alternate data source for
-    it. When the feed is reachable but carries no OMO item, degrade gracefully by
-    returning no rows; downstream feature/signal logic scores the OMO dimension
-    as neutral and annotates the missing data. A genuinely unreachable feed still
-    raises from ``fetch_cls_news``, preserving strict failure for real outages.
+    The PBC notice chain is preferred. CLS text remains a fallback when an older
+    official notice cannot be located, because net injection must not be inferred
+    without a known maturity amount.
     """
 
     if not use_live_data:
         raise RuntimeError("Sample data is disabled; open-market operations must come from a live source.")
 
-    rows = _collect_tushare_news(run_date)
+    try:
+        official_rows = _collect_pbc_official(run_date)
+    except RuntimeError:
+        logger.warning("PBC official OMO query failed for %s.", run_date, exc_info=True)
+        official_rows = []
+    official_is_complete = bool(official_rows) and all(bool(row.get("_net_complete")) for row in official_rows)
+    news_rows = [] if official_is_complete else _collect_tushare_news(run_date)
+    rows = _merge_official_and_news_rows(official_rows, news_rows)
     if not rows:
         logger.warning(
-            "No OMO announcement found in the news feed for %s; "
+            "No complete OMO record found for %s; "
             "scoring the OMO dimension as neutral.",
             run_date,
         )
     return rows
+
+
+def _collect_pbc_official(run_date: str) -> list[dict[str, object]]:
+    """Fetch same-day operation details from the PBC's official notice page."""
+
+    try:
+        from bs4 import BeautifulSoup  # type: ignore
+        import requests
+    except Exception as exc:
+        raise RuntimeError("requests and BeautifulSoup are required for PBC OMO notices.") from exc
+
+    def fetch(url: str) -> str:
+        response = requests.get(
+            url,
+            headers={"User-Agent": "Bond-Futures-Data-Monitor/1.0"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        response.encoding = "utf-8"
+        return response.text
+
+    try:
+        listing_htmls = [
+            retry_call(lambda: fetch(PBC_OMO_LIST_URL), description=f"PBC OMO list for {run_date}")
+        ]
+        remaining_history_pages = iter((2, 3))
+        article_cache: dict[str, str] = {}
+
+        def notice_links(notice_date: str) -> list[tuple[str, str]]:
+            links = [link for html in listing_htmls for link in _pbc_notice_links(html, notice_date)]
+            while not links:
+                try:
+                    page = next(remaining_history_pages)
+                except StopIteration:
+                    break
+                listing_htmls.append(
+                    retry_call(
+                        lambda page=page: fetch(PBC_OMO_HISTORY_URL.format(page=page)),
+                        description=f"PBC OMO history page {page} for {run_date}",
+                    )
+                )
+                links = _pbc_notice_links(listing_htmls[-1], notice_date)
+            return links
+
+        def notice_rows(notice_date: str) -> tuple[list[dict[str, object]], bool]:
+            links = notice_links(notice_date)
+            parsed_rows: list[dict[str, object]] = []
+            for title, url in links:
+                if url not in article_cache:
+                    article_html = retry_call(lambda url=url: fetch(url), description=f"PBC OMO notice {url}")
+                    article_cache[url] = BeautifulSoup(article_html, "html.parser").get_text(" ", strip=True)
+                text = article_cache[url]
+                parsed = parse_omo_text(notice_date, title, text, f"pbc_official:{url}")
+                if not parsed:
+                    parsed = _parse_zero_operation_notice(notice_date, title, text, f"pbc_official:{url}")
+                parsed_rows.extend(parsed)
+            return parsed_rows, bool(links)
+
+        rows, _ = notice_rows(run_date)
+        for row in rows:
+            tenor = row.get("tenor_days")
+            if not isinstance(tenor, int) or tenor <= 0:
+                row["_net_complete"] = False
+                continue
+            maturity_date = (Date.fromisoformat(run_date) - timedelta(days=tenor)).isoformat()
+            maturity_rows, maturity_notice_found = notice_rows(maturity_date)
+            maturity = sum(
+                float(item["operation_amount"])
+                for item in maturity_rows
+                if item["operation_type"] == row["operation_type"] and item["tenor_days"] == tenor
+            )
+            row["maturity_amount"] = maturity
+            row["net_injection_amount"] = float(row["operation_amount"]) - maturity
+            row["_net_complete"] = maturity_notice_found
+        return rows
+    except Exception as exc:
+        raise RuntimeError(f"PBC official OMO query failed for {run_date}.") from exc
+
+
+def _pbc_notice_links(html: str, run_date: str) -> list[tuple[str, str]]:
+    from bs4 import BeautifulSoup  # type: ignore
+
+    soup = BeautifulSoup(html, "html.parser")
+    links: list[tuple[str, str]] = []
+    for anchor in soup.find_all("a"):
+        title = anchor.get_text(" ", strip=True)
+        if not title.startswith("公开市场业务交易公告 ["):
+            continue
+        container = anchor.find_parent("td")
+        if container is None or run_date not in container.get_text(" ", strip=True):
+            continue
+        href = str(anchor.get("href") or "")
+        if href:
+            links.append((title, urljoin(PBC_OMO_LIST_URL, href)))
+    return links
+
+
+def _parse_zero_operation_notice(
+    run_date: str,
+    title: str,
+    text: str,
+    data_source: str,
+) -> list[dict[str, object]]:
+    match = re.search(r"(\d+)\s*天期?逆回购操作量为零", _normalize_text(text))
+    if not match:
+        return []
+    return [{
+        "date": run_date,
+        "operation_type": "reverse_repo",
+        "tenor_days": int(match.group(1)),
+        "operation_amount": 0.0,
+        "maturity_amount": 0.0,
+        "net_injection_amount": 0.0,
+        "operation_rate": None,
+        "source_title": title[:120],
+        "data_source": data_source,
+    }]
+
+
+def _merge_official_and_news_rows(
+    official_rows: list[dict[str, object]],
+    news_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Prefer complete official rows; use news only when official maturity is unavailable."""
+
+    if not official_rows:
+        return news_rows
+
+    merged: list[dict[str, object]] = []
+    used_news: set[int] = set()
+    for official in official_rows:
+        match_index = next(
+            (
+                index
+                for index, news in enumerate(news_rows)
+                if index not in used_news
+                and news["operation_type"] == official["operation_type"]
+                and news["tenor_days"] == official["tenor_days"]
+            ),
+            None,
+        )
+        row = {key: value for key, value in official.items() if not key.startswith("_")}
+        if bool(official.get("_net_complete")):
+            if match_index is not None:
+                used_news.add(match_index)
+                row["data_source"] = f"{row['data_source']}+{news_rows[match_index]['data_source']}"
+            merged.append(row)
+        elif match_index is not None:
+            news = news_rows[match_index]
+            used_news.add(match_index)
+            row["maturity_amount"] = news["maturity_amount"]
+            row["net_injection_amount"] = float(row["operation_amount"]) - float(news["maturity_amount"])
+            row["data_source"] = f"{row['data_source']}+{news['data_source']}"
+            merged.append(row)
+        else:
+            logger.warning(
+                "PBC OMO operation found for %s but no maturity total was available; omitting the incomplete net row.",
+                official["date"],
+            )
+
+    merged.extend(row for index, row in enumerate(news_rows) if index not in used_news)
+    return merged
 
 
 def parse_omo_text(run_date: str, title: str, content: str, data_source: str) -> list[dict[str, object]]:

@@ -49,6 +49,8 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     feature_groups = feature_details.get("feature_groups", {})
     data_sources = feature_details.get("data_sources", {})
     db_status = _database_write_status(conn, run_date)
+    prior_yields = _previous_values(conn, "bond_yields", "tenor", "yield_value", run_date)
+    prior_funding = _previous_values(conn, "funding_rates", "rate_name", "rate_value", run_date)
 
     raw_count = len(futures) + len(yields) + len(funding) + len(omo) + len(news) + len(macro)
     lines = [
@@ -57,6 +59,11 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         "## 每日市场判断",
         f"- 市场观点：**{_market_view_label(signal['market_view'])}**",
         f"- 综合评分：**{signal['total_score']:.2f}**",
+        "",
+        "## 市场结构提示",
+    ]
+    lines.extend(_market_structure_notes(futures, yields, funding, omo, prior_yields, prior_funding))
+    lines.extend([
         "",
         "## 数据真实性检查",
         f"- 国债期货合约：{len(futures)} 条",
@@ -71,7 +78,7 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         "## 评分拆解",
         "| 维度 | 分数 | 判断依据 |",
         "|---|---:|---|",
-    ]
+    ])
     lines.extend(
         f"| {item['category']} | {float(item['score']):.2f} | {item['reason']} |"
         for item in score_items
@@ -90,11 +97,19 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         for row in futures
     )
 
-    lines.extend(["", "## 收益率曲线概览", "| 期限 | 收益率 |", "|---|---:|"])
-    lines.extend(f"| {row['tenor']} | {row['yield_value']:.3f}% |" for row in yields)
+    lines.extend(["", "## 收益率曲线概览", "| 期限 | 收益率 | 较上一期 |", "|---|---:|---:|"])
+    lines.extend(
+        f"| {row['tenor']} | {row['yield_value']:.3f}% | "
+        f"{_format_bp_change(row['yield_value'], prior_yields.get(row['tenor']))} |"
+        for row in yields
+    )
 
-    lines.extend(["", "## 资金面概览", "| 指标 | 利率 |", "|---|---:|"])
-    lines.extend(f"| {row['rate_name']} | {row['rate_value']:.3f}% |" for row in funding)
+    lines.extend(["", "## 资金面概览", "| 指标 | 利率 | 较上一期 |", "|---|---:|---:|"])
+    lines.extend(
+        f"| {row['rate_name']} | {row['rate_value']:.3f}% | "
+        f"{_format_bp_change(row['rate_value'], prior_funding.get(row['rate_name']))} |"
+        for row in funding
+    )
 
     lines.extend(["", "## 宏观基本面概览", "| 指标 | 数值 | 数据期 |", "|---|---:|---|"])
     lines.extend(
@@ -267,15 +282,93 @@ def _format_tenor(value) -> str:
     return f"{int(value)} 天"
 
 
+def _previous_values(
+    conn: sqlite3.Connection,
+    table: str,
+    key_column: str,
+    value_column: str,
+    run_date: str,
+) -> dict[str, float]:
+    allowed = {
+        ("bond_yields", "tenor", "yield_value"),
+        ("funding_rates", "rate_name", "rate_value"),
+    }
+    if (table, key_column, value_column) not in allowed:
+        raise ValueError(f"Unsupported previous-value query: {table}.{key_column}.{value_column}")
+    prior = conn.execute(f"SELECT MAX(date) AS d FROM {table} WHERE date < ?", (run_date,)).fetchone()
+    if not prior or not prior["d"]:
+        return {}
+    return {
+        str(row[key_column]): float(row[value_column])
+        for row in conn.execute(
+            f"SELECT {key_column}, {value_column} FROM {table} WHERE date = ?",
+            (prior["d"],),
+        )
+    }
+
+
+def _format_bp_change(current: float, previous: float | None) -> str:
+    if previous is None:
+        return "缺失"
+    return f"{(float(current) - float(previous)) * 100:+.1f} bp"
+
+
+def _market_structure_notes(futures, yields, funding, omo, prior_yields, prior_funding) -> list[str]:
+    notes: list[str] = []
+    yield_map = {row["tenor"]: float(row["yield_value"]) for row in yields}
+    funding_map = {row["rate_name"]: float(row["rate_value"]) for row in funding}
+
+    if futures:
+        strongest = max(futures, key=lambda row: float(row["daily_return"]))
+        weakest = min(futures, key=lambda row: float(row["daily_return"]))
+        notes.append(
+            f"- 期货强弱：{strongest['contract']} 表现最强（{strongest['daily_return']:+.3%}），"
+            f"{weakest['contract']} 表现最弱（{weakest['daily_return']:+.3%}）。"
+        )
+    if "10Y" in yield_map:
+        change = _format_bp_change(yield_map["10Y"], prior_yields.get("10Y"))
+        curve = ""
+        if "2Y" in yield_map and "30Y" in yield_map:
+            curve = (
+                f"；10Y-2Y 为 {(yield_map['10Y'] - yield_map['2Y']) * 100:.1f} bp，"
+                f"30Y-10Y 为 {(yield_map['30Y'] - yield_map['10Y']) * 100:.1f} bp"
+            )
+        notes.append(f"- 利率曲线：10Y 收益率 {yield_map['10Y']:.3f}%，较上一期 {change}{curve}。")
+
+    anchor = "DR007" if "DR007" in funding_map else "FDR007" if "FDR007" in funding_map else None
+    broad = "R007" if "R007" in funding_map else "FR007" if "FR007" in funding_map else None
+    if anchor:
+        change = _format_bp_change(funding_map[anchor], prior_funding.get(anchor))
+        spread = (
+            f"，{broad}-{anchor} 利差 {(funding_map[broad] - funding_map[anchor]) * 100:+.1f} bp"
+            if broad else ""
+        )
+        notes.append(f"- 资金锚：{anchor} 为 {funding_map[anchor]:.3f}%，较上一期 {change}{spread}。")
+
+    if omo:
+        net = sum(float(row["net_injection_amount"]) for row in omo)
+        rates = [float(row["operation_rate"]) for row in omo if row["operation_rate"] is not None]
+        rate_text = f"，操作利率 {rates[-1]:.2f}%" if rates else ""
+        notes.append(f"- 公开市场：当日合计净投放 {net:+.0f} 亿元{rate_text}。")
+    else:
+        notes.append("- 公开市场：未取得可完整计算净投放的记录，本项保持中性。")
+    return notes
+
+
 def _feature_panel_rows(feature_groups: dict) -> list[str]:
     labels = {
         "yield_10y_change": "10Y 收益率变化",
         "yield_30y_change": "30Y 收益率变化",
         "spread_10y_2y": "10Y-2Y 利差",
         "spread_30y_10y": "30Y-10Y 利差",
-        "dr007_change": "DR007 变化",
+        "funding_anchor_name": "资金锚名称",
+        "funding_anchor_value": "资金锚水平",
+        "funding_anchor_change": "资金锚变化",
+        "repo_7d_spread": "7天回购分层利差",
+        "shibor_7d_spread": "Shibor 7D-资金锚",
         "available_rates": "可用资金利率",
         "omo_net_injection_amount": "公开市场净投放",
+        "omo_operation_rate": "公开市场操作利率",
         "operation_count": "公开市场操作记录数",
         "avg_futures_return": "期货平均日收益率",
         "avg_volume_change": "成交活跃度变化",

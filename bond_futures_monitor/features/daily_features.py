@@ -78,18 +78,35 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
 
     yield_10y_change = _yield_change(conn, run_date, "10Y")
     yield_30y_change = _yield_change(conn, run_date, "30Y")
-    dr007_change = _rate_change(conn, run_date, "DR007")
+    funding_anchor_name = "DR007" if "DR007" in funding else "FDR007" if "FDR007" in funding else None
+    funding_anchor_change = (
+        _rate_change(conn, run_date, funding_anchor_name) if funding_anchor_name is not None else None
+    )
+    broad_repo_name = "R007" if "R007" in funding else "FR007" if "FR007" in funding else None
+    repo_7d_spread = (
+        funding[broad_repo_name] - funding[funding_anchor_name]
+        if broad_repo_name is not None and funding_anchor_name is not None
+        else None
+    )
+    shibor_7d_spread = (
+        funding["SHIBOR_7D"] - funding[funding_anchor_name]
+        if "SHIBOR_7D" in funding and funding_anchor_name is not None
+        else None
+    )
     avg_volume_change = _avg_volume_change(conn, run_date, volumes)
     omo_net_injection_amount = sum(float(row["net_injection_amount"]) for row in omo_rows) if omo_rows else None
+    operation_rates = [float(row["operation_rate"]) for row in omo_rows if row["operation_rate"] is not None]
     return {
         "date": run_date,
         "yield_10y_change": yield_10y_change,
         "yield_30y_change": yield_30y_change,
         "spread_10y_2y": _spread(yields, "10Y", "2Y"),
         "spread_30y_10y": _spread(yields, "30Y", "10Y"),
-        "dr007_change": dr007_change,
+        # Keep the database column name for compatibility; details below record
+        # whether the value is based on DR007 or the distinct FDR007 fixing.
+        "dr007_change": funding_anchor_change,
         "omo_net_injection_amount": omo_net_injection_amount,
-        "omo_operation_rate": None,
+        "omo_operation_rate": operation_rates[-1] if operation_rates else None,
         "avg_futures_return": mean(futures_returns) if futures_returns else None,
         "avg_volume_change": avg_volume_change,
         "avg_ai_sentiment_score": mean(ai_scores) if ai_scores else 0.0,
@@ -115,11 +132,16 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
                     "spread_30y_10y": _spread(yields, "30Y", "10Y"),
                 },
                 "funding": {
-                    "dr007_change": dr007_change,
+                    "funding_anchor_name": funding_anchor_name,
+                    "funding_anchor_value": funding.get(funding_anchor_name) if funding_anchor_name else None,
+                    "funding_anchor_change": funding_anchor_change,
+                    "repo_7d_spread": repo_7d_spread,
+                    "shibor_7d_spread": shibor_7d_spread,
                     "available_rates": sorted(funding),
                 },
                 "open_market_operations": {
                     "omo_net_injection_amount": omo_net_injection_amount,
+                    "omo_operation_rate": operation_rates[-1] if operation_rates else None,
                     "operation_count": len(omo_rows),
                 },
                 "futures": {

@@ -1,3 +1,5 @@
+import pytest
+
 from bond_futures_monitor.ai.text_signal import classify_news_item
 from bond_futures_monitor.database import (
     connect,
@@ -137,12 +139,17 @@ def test_daily_report_generation(tmp_path):
     content = report_path.read_text(encoding="utf-8")
     assert report_path.exists()
     assert "每日市场判断" in content
+    assert "## 市场结构提示" in content
+    assert "期货强弱：" in content
+    assert "资金锚：DR007" in content
     assert "数据真实性检查" in content
     assert "## 公开市场操作概览" in content
-    assert "公开市场操作利率" not in content
+    assert "公开市场操作利率" in content
     assert "| 类型 | 期限 | 投放 | 到期 | 净投放 | 来源标题 |" in content
     assert "当日真实数据合计" in content
     assert "国债期货概览" in content
+    assert "| 期限 | 收益率 | 较上一期 |" in content
+    assert "| 指标 | 利率 | 较上一期 |" in content
     assert "政策与新闻结构化解读" in content
     assert "原始标题：央行公开市场净投放呵护流动性" in content
     assert "原始标题：财政部安排超长期特别国债资金支持城市更新" in content
@@ -184,3 +191,19 @@ def test_features_use_latest_ai_signal_per_news_item(tmp_path):
 
     assert features["avg_ai_sentiment_score"] == -1
     assert features["details"]["ai_signal_count"] == 1
+
+
+def test_features_label_fdr007_as_the_funding_anchor(tmp_path):
+    with connect(tmp_path / "monitor.db") as conn:
+        init_db(conn)
+        seed_real_source_rows(conn)
+        for weighted, fixing in (("DR001", "FDR001"), ("DR007", "FDR007"), ("R007", "FR007")):
+            conn.execute(
+                "UPDATE funding_rates SET rate_name = ? WHERE date = ? AND rate_name = ?",
+                (fixing, RUN_DATE, weighted),
+            )
+        features = build_daily_features(conn, RUN_DATE)
+
+    funding = features["details"]["feature_groups"]["funding"]
+    assert funding["funding_anchor_name"] == "FDR007"
+    assert funding["repo_7d_spread"] == pytest.approx(0.2)

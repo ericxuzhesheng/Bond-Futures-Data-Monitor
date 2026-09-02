@@ -57,6 +57,19 @@ def test_validate_real_data_coverage_tolerates_missing_omo_rows(tmp_path):
         validate_real_data_coverage(conn, RUN_DATE)
 
 
+def test_validate_real_data_coverage_accepts_correctly_named_repo_fixings(tmp_path):
+    with connect(tmp_path / "monitor.db") as conn:
+        init_db(conn)
+        seed_real_source_rows(conn)
+        for weighted, fixing in (("DR001", "FDR001"), ("DR007", "FDR007"), ("R007", "FR007")):
+            conn.execute(
+                "UPDATE funding_rates SET rate_name = ?, data_source = ? WHERE date = ? AND rate_name = ?",
+                (fixing, f"akshare_chinamoney_repo_rate:{RUN_DATE}", RUN_DATE, weighted),
+            )
+        conn.commit()
+        validate_real_data_coverage(conn, RUN_DATE)
+
+
 def test_validate_real_data_coverage_tolerates_missing_policy_news(tmp_path):
     with connect(tmp_path / "monitor.db") as conn:
         init_db(conn)

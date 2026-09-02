@@ -9,7 +9,9 @@ from datetime import date as Date
 from bond_futures_monitor.retry import retry_call
 
 
-REQUIRED_RATE_NAMES = {"DR001", "DR007", "R007", "SHIBOR_ON", "SHIBOR_7D"}
+SHIBOR_RATE_NAMES = {"SHIBOR_ON", "SHIBOR_7D"}
+WEIGHTED_REPO_RATE_NAMES = {"DR001", "DR007", "R007"}
+FIXING_REPO_RATE_NAMES = {"FDR001", "FDR007", "FR007"}
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +32,7 @@ def collect_funding_rates(run_date: str, use_live_data: bool = True) -> list[dic
     except RuntimeError:
         logger.warning("AkShare funding-rate query failed for %s.", run_date, exc_info=True)
         rows = []
-    missing = REQUIRED_RATE_NAMES - {str(row["rate_name"]) for row in rows}
-    if missing:
+    if not _has_required_coverage(rows):
         try:
             fallback = _collect_tushare(run_date)
         except RuntimeError:
@@ -39,11 +40,13 @@ def collect_funding_rates(run_date: str, use_live_data: bool = True) -> list[dic
         else:
             existing = {str(row["rate_name"]) for row in rows}
             rows.extend(row for row in fallback if str(row["rate_name"]) not in existing)
-    available = {row["rate_name"] for row in rows}
-    if not REQUIRED_RATE_NAMES.issubset(available):
+    available = {str(row["rate_name"]) for row in rows}
+    if not _has_required_coverage(rows):
         raise RuntimeError(
             "Live funding-rate coverage is incomplete: "
-            f"expected at least {sorted(REQUIRED_RATE_NAMES)}, got {sorted(available) or 'none'} for {run_date}."
+            f"expected {sorted(SHIBOR_RATE_NAMES)} plus either "
+            f"{sorted(WEIGHTED_REPO_RATE_NAMES)} or {sorted(FIXING_REPO_RATE_NAMES)}; "
+            f"got {sorted(available) or 'none'} for {run_date}."
         )
     return rows
 
@@ -62,12 +65,30 @@ def _collect_akshare(run_date: str) -> list[dict[str, object]]:
             lambda: ak.repo_rate_hist(start_date=trade_date, end_date=trade_date),
             description=f"AkShare CFETS repo fixings for {trade_date}",
         )
+    except Exception:
+        logger.warning("AkShare CFETS historical repo endpoint failed; trying official current CSVs.", exc_info=True)
+        try:
+            fr = retry_call(
+                lambda: ak.repo_rate_query(symbol="回购定盘利率"),
+                description="AkShare CFETS FR current CSV",
+            )
+            fdr = retry_call(
+                lambda: ak.repo_rate_query(symbol="银银间回购定盘利率"),
+                description="AkShare CFETS FDR current CSV",
+            )
+            repo = fr.merge(fdr, on="date", how="outer")
+        except Exception:
+            logger.warning("AkShare CFETS current repo CSVs failed for %s.", trade_date, exc_info=True)
+            repo = None
+
+    try:
         shibor = retry_call(
             ak.macro_china_shibor_all,
             description=f"AkShare Shibor history for {trade_date}",
         )
-    except Exception as exc:
-        raise RuntimeError(f"AkShare funding-rate query failed for {trade_date}.") from exc
+    except Exception:
+        logger.warning("AkShare Shibor query failed for %s.", trade_date, exc_info=True)
+        shibor = None
 
     rows = _rows_from_akshare_repo(repo, run_date)
     rows.extend(_rows_from_akshare_shibor(shibor, run_date))
@@ -88,7 +109,7 @@ def _rows_from_akshare_repo(df, run_date: str) -> list[dict[str, object]]:
             "rate_value": _validated_rate(rate_name, first[field]),
             "data_source": f"akshare_chinamoney_repo_rate:{run_date}",
         }
-        for rate_name, field in (("DR001", "FDR001"), ("DR007", "FDR007"), ("R007", "FR007"))
+        for rate_name, field in (("FDR001", "FDR001"), ("FDR007", "FDR007"), ("FR007", "FR007"))
     ]
 
 
@@ -173,14 +194,20 @@ def _collect_tushare(run_date: str) -> list[dict[str, object]]:
                     "date": run_date,
                     "rate_name": name,
                     # Tushare repo_daily has no "rate" column; for repos the
-                    # volume-weighted average price ("weight") IS the rate, which
-                    # matches the official DR007/R007 fixing definition.
+                    # volume-weighted average price ("weight") is the actual
+                    # DR/R transaction-weighted rate, not the FDR/FR fixing.
                     "rate_value": _validated_rate(name, matched.iloc[0]["weight"]),
                     "data_source": f"tushare_repo_daily:{trade_date}",
                 }
             )
             seen.add(name)
     return rows
+
+
+def _has_required_coverage(rows: list[dict[str, object]]) -> bool:
+    available = {str(row["rate_name"]) for row in rows}
+    has_repo_set = WEIGHTED_REPO_RATE_NAMES.issubset(available) or FIXING_REPO_RATE_NAMES.issubset(available)
+    return SHIBOR_RATE_NAMES.issubset(available) and has_repo_set
 
 
 def _validated_rate(rate_name: str, value: object) -> float:

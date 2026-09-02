@@ -46,6 +46,20 @@ def test_duplicate_insert_handling(tmp_path):
     assert count == 4
 
 
+def test_init_db_repairs_legacy_repo_fixing_names(tmp_path):
+    db_path = tmp_path / "monitor.db"
+    with connect(db_path) as conn:
+        init_db(conn)
+        conn.execute(
+            "INSERT INTO funding_rates VALUES (?, ?, ?, ?)",
+            ("2026-06-08", "DR007", 1.5, "akshare_chinamoney_repo_rate:2026-06-08"),
+        )
+        conn.commit()
+        init_db(conn)
+        row = conn.execute("SELECT rate_name FROM funding_rates").fetchone()
+    assert row["rate_name"] == "FDR007"
+
+
 def test_ai_text_signals_are_inserted_as_a_batch(tmp_path):
     db_path = tmp_path / "monitor.db"
     signals = [
