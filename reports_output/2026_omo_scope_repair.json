@@ -1,0 +1,328 @@
+{
+  "applied": true,
+  "removed_records": [
+    {
+      "stored_id": 9,
+      "date": "2026-06-05",
+      "operation_type": "outright_reverse_repo",
+      "tenor_days": 90,
+      "operation_amount": 5000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 5000.0,
+      "operation_rate": null,
+      "source_title": "财联社6月5日早间新闻精选",
+      "data_source": "tushare_news_cls:2026-06-05"
+    },
+    {
+      "stored_id": 13,
+      "date": "2026-06-12",
+      "operation_type": "outright_reverse_repo",
+      "tenor_days": 180,
+      "operation_amount": 6000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 6000.0,
+      "operation_rate": null,
+      "source_title": "央行：6月15日开展6000亿元买断式逆回购操作",
+      "data_source": "tushare_news_cls:2026-06-12"
+    },
+    {
+      "stored_id": 23,
+      "date": "2026-06-26",
+      "operation_type": "reverse_repo",
+      "tenor_days": null,
+      "operation_amount": 0.0,
+      "maturity_amount": 22655.0,
+      "net_injection_amount": -22655.0,
+      "operation_rate": null,
+      "source_title": "下周央行公开市场将有22655亿元逆回购到期",
+      "data_source": "tushare_news_cls:2026-06-26"
+    },
+    {
+      "stored_id": 28,
+      "date": "2026-07-03",
+      "operation_type": "outright_reverse_repo",
+      "tenor_days": 90,
+      "operation_amount": 10000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 10000.0,
+      "operation_rate": null,
+      "source_title": "央行：7月6日开展10000亿元买断式逆回购操作",
+      "data_source": "tushare_news_cls:2026-07-03"
+    },
+    {
+      "stored_id": 30,
+      "date": "2026-07-06",
+      "operation_type": "outright_reverse_repo",
+      "tenor_days": 90,
+      "operation_amount": 10000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 10000.0,
+      "operation_rate": null,
+      "source_title": "财联社7月6日早间新闻精选",
+      "data_source": "tushare_news_cls:2026-07-06"
+    },
+    {
+      "stored_id": 35,
+      "date": "2026-07-10",
+      "operation_type": "outright_reverse_repo",
+      "tenor_days": null,
+      "operation_amount": 10000.0,
+      "maturity_amount": 9000.0,
+      "net_injection_amount": -6165.0,
+      "operation_rate": null,
+      "source_title": "提醒：下周央行公开市场将有620亿元逆回购到期",
+      "data_source": "tushare_news_cls:2026-07-10"
+    },
+    {
+      "stored_id": 38,
+      "date": "2026-07-14",
+      "operation_type": "outright_reverse_repo",
+      "tenor_days": 180,
+      "operation_amount": 14000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 14000.0,
+      "operation_rate": null,
+      "source_title": "央行：7月15日开展14000亿元买断式逆回购操作",
+      "data_source": "tushare_news_cls:2026-07-14"
+    },
+    {
+      "stored_id": 40,
+      "date": "2026-07-15",
+      "operation_type": "outright_reverse_repo",
+      "tenor_days": null,
+      "operation_amount": 14000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 14000.0,
+      "operation_rate": null,
+      "source_title": "财联社7月15日早间新闻精选",
+      "data_source": "tushare_news_cls:2026-07-15"
+    },
+    {
+      "stored_id": 49,
+      "date": "2026-07-24",
+      "operation_type": "reverse_repo",
+      "tenor_days": null,
+      "operation_amount": 6000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 6000.0,
+      "operation_rate": null,
+      "source_title": "央行将在7月29日至7月31日、8月3日开展隔夜逆回购操作",
+      "data_source": "tushare_news_cls:2026-07-24"
+    },
+    {
+      "stored_id": 51,
+      "date": "2026-07-27",
+      "operation_type": "reverse_repo",
+      "tenor_days": null,
+      "operation_amount": 6000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 6000.0,
+      "operation_rate": 65.3,
+      "source_title": "财联社7月27日早间新闻精选",
+      "data_source": "tushare_news_cls:2026-07-27"
+    },
+    {
+      "stored_id": 56,
+      "date": "2026-08-03",
+      "operation_type": "reverse_repo",
+      "tenor_days": 7,
+      "operation_amount": 6000.0,
+      "maturity_amount": 3255.0,
+      "net_injection_amount": 2745.0,
+      "operation_rate": null,
+      "source_title": "投资日历：周一资本市场大事提醒",
+      "data_source": "tushare_news_cls:2026-08-03"
+    },
+    {
+      "stored_id": 57,
+      "date": "2026-08-04",
+      "operation_type": "outright_reverse_repo",
+      "tenor_days": 90,
+      "operation_amount": 5000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 5000.0,
+      "operation_rate": null,
+      "source_title": "央行：8月5日将开展5000亿元买断式逆回购操作 期限为3个月",
+      "data_source": "tushare_news_cls:2026-08-04"
+    },
+    {
+      "stored_id": 59,
+      "date": "2026-08-05",
+      "operation_type": "outright_reverse_repo",
+      "tenor_days": 90,
+      "operation_amount": 5000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 5000.0,
+      "operation_rate": null,
+      "source_title": "财联社8月5日早间新闻精选",
+      "data_source": "tushare_news_cls:2026-08-05"
+    },
+    {
+      "stored_id": 62,
+      "date": "2026-08-07",
+      "operation_type": "outright_reverse_repo",
+      "tenor_days": 7,
+      "operation_amount": 5000.0,
+      "maturity_amount": 10000.0,
+      "net_injection_amount": -17255.0,
+      "operation_rate": null,
+      "source_title": "下周央行公开市场将有1165亿元逆回购到期",
+      "data_source": "tushare_news_cls:2026-08-07"
+    },
+    {
+      "stored_id": 66,
+      "date": "2026-08-12",
+      "operation_type": "reverse_repo",
+      "tenor_days": null,
+      "operation_amount": 6000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 6000.0,
+      "operation_rate": null,
+      "source_title": "央行：将在8月14日、8月17日至8月19日开展隔夜逆回购操作 每日操作量不超过6000亿元",
+      "data_source": "tushare_news_cls:2026-08-12"
+    },
+    {
+      "stored_id": 68,
+      "date": "2026-08-13",
+      "operation_type": "outright_reverse_repo",
+      "tenor_days": 180,
+      "operation_amount": 10000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 10000.0,
+      "operation_rate": null,
+      "source_title": "央行：8月14日开展10000亿元买断式逆回购操作",
+      "data_source": "tushare_news_cls:2026-08-13"
+    },
+    {
+      "stored_id": 70,
+      "date": "2026-08-14",
+      "operation_type": "outright_reverse_repo",
+      "tenor_days": 180,
+      "operation_amount": 10000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 10000.0,
+      "operation_rate": 0.949,
+      "source_title": "财联社8月14日早间新闻精选",
+      "data_source": "tushare_news_cls:2026-08-14"
+    },
+    {
+      "stored_id": 73,
+      "date": "2026-08-24",
+      "operation_type": "reverse_repo",
+      "tenor_days": null,
+      "operation_amount": 6000.0,
+      "maturity_amount": 0.0,
+      "net_injection_amount": 6000.0,
+      "operation_rate": null,
+      "source_title": "央行将在8月27日至9月1日开展隔夜逆回购操作 每日操作量不超过6000亿元",
+      "data_source": "tushare_news_cls:2026-08-24"
+    }
+  ],
+  "unmatched_news": [
+    {
+      "date": "2026-06-08",
+      "title": "投资日历：周一资本市场大事提醒"
+    },
+    {
+      "date": "2026-06-09",
+      "title": "投资日历：周二资本市场大事提醒"
+    },
+    {
+      "date": "2026-06-12",
+      "title": "投资日历：周五资本市场大事提醒"
+    },
+    {
+      "date": "2026-06-15",
+      "title": "投资日历：周一资本市场大事提醒"
+    },
+    {
+      "date": "2026-06-17",
+      "title": "投资日历：周三资本市场大事提醒"
+    },
+    {
+      "date": "2026-06-22",
+      "title": "投资日历：周一资本市场大事提醒"
+    },
+    {
+      "date": "2026-06-23",
+      "title": "投资日历：周二资本市场大事提醒"
+    },
+    {
+      "date": "2026-06-24",
+      "title": "投资日历：周三资本市场大事提醒"
+    },
+    {
+      "date": "2026-07-06",
+      "title": "投资日历：周一资本市场大事提醒"
+    },
+    {
+      "date": "2026-07-07",
+      "title": "投资日历：周二资本市场大事提醒"
+    },
+    {
+      "date": "2026-07-15",
+      "title": "投资日历：周三资本市场大事提醒"
+    },
+    {
+      "date": "2026-07-22",
+      "title": "投资日历：周三资本市场大事提醒"
+    },
+    {
+      "date": "2026-07-23",
+      "title": "投资日历：周四资本市场大事提醒"
+    },
+    {
+      "date": "2026-07-30",
+      "title": "投资日历：周四资本市场大事提醒"
+    },
+    {
+      "date": "2026-08-04",
+      "title": "投资日历：周二资本市场大事提醒"
+    },
+    {
+      "date": "2026-08-05",
+      "title": "投资日历：周三资本市场大事提醒"
+    },
+    {
+      "date": "2026-08-06",
+      "title": "投资日历：周四资本市场大事提醒"
+    },
+    {
+      "date": "2026-08-07",
+      "title": "投资日历：周五资本市场大事提醒"
+    },
+    {
+      "date": "2026-08-10",
+      "title": "投资日历：周一资本市场大事提醒"
+    },
+    {
+      "date": "2026-08-17",
+      "title": "投资日历：周一资本市场大事提醒"
+    },
+    {
+      "date": "2026-08-28",
+      "title": "投资日历：周五资本市场大事提醒"
+    }
+  ],
+  "affected_dates": [
+    "2026-06-05",
+    "2026-06-12",
+    "2026-06-26",
+    "2026-07-03",
+    "2026-07-06",
+    "2026-07-10",
+    "2026-07-14",
+    "2026-07-15",
+    "2026-07-24",
+    "2026-07-27",
+    "2026-08-03",
+    "2026-08-04",
+    "2026-08-05",
+    "2026-08-07",
+    "2026-08-12",
+    "2026-08-13",
+    "2026-08-14",
+    "2026-08-24"
+  ],
+  "reason": "Weekly aggregates or planned operations are not same-day realized OMO."
+}

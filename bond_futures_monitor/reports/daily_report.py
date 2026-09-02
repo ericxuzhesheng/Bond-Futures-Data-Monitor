@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -105,7 +106,8 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     lines.extend([
         "",
         "*收益率与资金利率的变化以 bp 计，1 bp 等于 0.01 个百分点。分位只使用已有同口径观测，"
-        "不足20条时按实际样本计算；缺失比较标为“缺失”。期货5日栏为五次观测的复合收益。*",
+        "不足20条时按实际样本计算；无法比较时注明原因。期货5日栏为五次观测的复合收益，"
+        "成交量和持仓量5日栏为相对五个交易观测前的变化率。*",
         "",
         "## 期货表现",
         "",
@@ -198,7 +200,7 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     )
     lines.extend(["", "| 数据期 | CPI 同比 | PPI 同比 | 制造业 PMI |", "|---|---:|---:|---:|"])
     lines.extend(_macro_history_table_rows(macro_history))
-    lines.extend(["", "国家统计局历史数据按日报日期截断，缺项保持缺失。", "", "</details>", ""])
+    lines.extend(["", "国家统计局历史数据按日报日期截断。各指标发布时间不同，未取得的当期发布值不以之后发布的数据回填。", "", "</details>", ""])
     if treasury_calendar:
         lines.extend(["### 已公告国债招标", "", "| 招标日 | 期限 | 计划发行额 | 官方通知 |",
                       "|---|---|---:|---|"])
@@ -239,7 +241,7 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
                   "| 维度 | 权重 | 分数 | 数据状态 | 判断依据 |", "|---|---:|---:|---|---|"])
     lines.extend(
         f"| {item['category']} | {float(item.get('weight', 1)):.1f} | {float(item['score']):+.2f} | "
-        f"{'可用' if item.get('available', True) else '缺失'} | {item['reason']} |" for item in score_items
+        f"{'可用' if item.get('available', True) else '未参与评分'} | {item['reason']} |" for item in score_items
     )
     if signal_details.get("conflicts"):
         lines.extend([""] + signal_details["conflicts"])
@@ -284,11 +286,32 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     lines.extend(f"{key}: {value}" for key, value in db_status.items())
     lines.extend(["```", "", "</details>", ""])
 
-    # Missing table cells use a readable word, not a typographic dash.
-    content = "\n".join(lines).replace("—", "缺失")
+    content = "\n".join(lines)
+    validate_report_tables(content)
     path = output_dir / f"{run_date}_daily_report.md"
     path.write_text(content, encoding="utf-8")
     return path
+
+
+def validate_report_tables(content: str) -> int:
+    """Reject unexplained placeholders before publishing; never rewrite source text."""
+    count = 0
+    in_code = False
+    for line_number, line in enumerate(content.splitlines(), 1):
+        if line.startswith("```"):
+            in_code = not in_code
+        if in_code or not line.startswith("|"):
+            continue
+        for cell in re.split(r"(?<!\\)\|", line)[1:-1]:
+            value = cell.strip().strip("`")
+            if re.fullmatch(r":?-+:?", value):
+                continue
+            count += 1
+            if value in ("", "缺失", "—", "–") or re.fullmatch(
+                r"(?:none|null|n/?a|[+-]?(?:nan|inf(?:inity)?))(?:%| bp|x)?", value, re.I
+            ):
+                raise ValueError(f"Unexplained report cell at line {line_number}: {line}")
+    return count
 
 
 DATASET_LABELS = {
@@ -373,34 +396,42 @@ def _multi_horizon_rows(conn: sqlite3.Connection, run_date: str) -> list[str]:
     ).fetchall()[::-1]
     if futures:
         values = [float(row["value"]) for row in futures]
-        five = f"{_compound(values[-5:]):+.3%}" if len(values) >= 5 else "缺失"
+        five = f"{_compound(values[-5:]):+.3%}" if len(values) >= 5 else "样本不足（需5次观测）"
         rows.append(f"| 期货平均收益 | {values[-1]:+.3%} | {values[-1]:+.3%} | {five} | {_pct_rank(values):.0%} |")
     activity = conn.execute(
         "SELECT date, SUM(volume) AS volume, SUM(open_interest) AS oi FROM futures_quotes WHERE date<=? GROUP BY date ORDER BY date DESC LIMIT 20",
         (run_date,),
     ).fetchall()[::-1]
-    if len(activity) >= 2:
+    if activity:
         volumes = [float(row["volume"]) for row in activity]
         oi = [float(row["oi"]) for row in activity]
-        rows.append(f"| 总成交量 | {volumes[-1]:,.0f} | {volumes[-1]/volumes[-2]-1:+.1%} | — | {_pct_rank(volumes):.0%} |")
-        five_oi = f"{oi[-1]/oi[-6]-1:+.1%}" if len(oi) >= 6 else "—"
-        rows.append(
-            f"| 总持仓量 | {oi[-1]:,.0f} | {oi[-1]/oi[-2]-1:+.1%} | {five_oi} | {_pct_rank(oi):.0%} |"
-        )
-    return rows or ["| 数据不足 | — | — | — | — |"]
+        for label, values in (("总成交量", volumes), ("总持仓量", oi)):
+            rows.append(
+                f"| {label} | {values[-1]:,.0f} | {_relative_change(values, 1)} | "
+                f"{_relative_change(values, 5)} | {_pct_rank(values):.0%} |"
+            )
+    return rows
+
+
+def _relative_change(values: list[float], periods: int) -> str:
+    if len(values) <= periods:
+        return f"样本不足（需{periods + 1}次观测）"
+    baseline = values[-periods - 1]
+    if baseline <= 0:
+        return "基期为0或负值，不可比"
+    return f"{values[-1] / baseline - 1:+.1%}"
 
 
 def _level_horizon_row(label: str, series, unit: str, bp: bool = False) -> str:
     if not series:
-        return f"| {label} | — | — | — | — |"
+        return f"| {label} | 未取得观测值 | 无观测，未计算 | 无观测，未计算 | 无观测，未计算 |"
     values = [float(row["value"]) for row in series]
     one = values[-1] - values[-2] if len(values) >= 2 else None
     five = values[-1] - values[-6] if len(values) >= 6 else None
     scale, suffix = (100, " bp") if bp else (1, unit)
-    return (
-        f"| {label} | {values[-1]:.3f}{unit} | "
-        f"{one*scale:+.1f}{suffix if one is not None else ''}" if one is not None else f"| {label} | {values[-1]:.3f}{unit} | —"
-    ) + (f" | {five*scale:+.1f}{suffix} |" if five is not None else " | — |") + f" {_pct_rank(values):.0%} |"
+    one_text = f"{one*scale:+.1f}{suffix}" if one is not None else "样本不足（需2次观测）"
+    five_text = f"{five*scale:+.1f}{suffix}" if five is not None else "样本不足（需6次观测）"
+    return f"| {label} | {values[-1]:.3f}{unit} | {one_text} | {five_text} | {_pct_rank(values):.0%} |"
 
 
 def _futures_position_rows(conn: sqlite3.Connection, run_date: str) -> list[str]:
@@ -420,12 +451,13 @@ def _futures_position_rows(conn: sqlite3.Connection, run_date: str) -> list[str]
         ret = float(current["daily_return"])
         oi_change = float(current["open_interest"]) / float(prior["open_interest"]) - 1 if prior and prior["open_interest"] > 0 else None
         quadrant = _quadrant(ret, oi_change)
-        volume_ratio = f"{float(current['volume'])/avg_volume:.2f}x" if avg_volume > 0 else "缺失"
-        oi_ratio = f"{float(current['open_interest'])/avg_oi:.2f}x" if avg_oi > 0 else "缺失"
+        unavailable = "无历史观测，未计算均值" if not baseline else "历史均值为0或负值，不可比"
+        volume_ratio = f"{float(current['volume'])/avg_volume:.2f}x" if avg_volume > 0 else unavailable
+        oi_ratio = f"{float(current['open_interest'])/avg_oi:.2f}x" if avg_oi > 0 else unavailable
         result.append(
             f"| {contract} | {ret:+.3%} | {_pct(oi_change)} | {volume_ratio} | {oi_ratio} | {quadrant} |"
         )
-    return result or ["| 无 | — | — | — | — | 数据不足 |"]
+    return result or ["本期未取得期货行情，量价指标未计算。"]
 
 
 def _curve_structure_rows(conn: sqlite3.Connection, run_date: str) -> list[str]:
@@ -503,9 +535,9 @@ def _collection_status_rows(statuses: dict) -> list[str]:
     labels = {"ok": "正常", "partial": "部分", "empty": "经确认无记录", "unavailable": "不可用"}
     return [
         f"| {key} | {labels.get(value.get('status'), value.get('status', '未知'))} | {value.get('row_count', 0)} | "
-        f"{value.get('observation_date') or '—'} | {_escape_markdown(value.get('data_source', '—'))} | {_escape_markdown(value.get('message', ''))} |"
+        f"{value.get('observation_date') or '未记录观测日'} | {_escape_markdown(value.get('data_source') or '未记录来源')} | {_escape_markdown(value.get('message') or '未记录采集说明')} |"
         for key, value in statuses.items()
-    ] or ["| 无状态记录 | 未知 | 0 | — | — | 旧数据库尚未记录采集状态 |"]
+    ] or ["| 无状态记录 | 未知 | 0 | 未记录观测日 | 未记录来源 | 旧数据库尚未记录采集状态 |"]
 
 
 def _status_sentence(statuses: dict, dataset: str) -> str:
@@ -537,16 +569,16 @@ def _pct_rank(values: list[float]) -> float:
 
 
 def _pct(value: float | None) -> str:
-    return "—" if value is None else f"{value:+.2%}"
+    return "无可比基期或基期为0" if value is None else f"{value:+.2%}"
 
 
 def _bp(value: float | None) -> str:
-    return "—" if value is None else f"{value*100:+.1f} bp"
+    return "历史观测不足或期限不齐" if value is None else f"{value*100:+.1f} bp"
 
 
 def _quadrant(ret: float, oi_change: float | None) -> str:
     if oi_change is None:
-        return "数据不足"
+        return "无可比持仓，未判定"
     return ("价涨" if ret >= 0 else "价跌") + ("增仓" if oi_change >= 0 else "减仓")
 
 
@@ -595,11 +627,11 @@ def _macro_history_table_rows(rows) -> list[str]:
             f"{_format_macro_history(values.get('PPI_YOY'), '%')} | "
             f"{_format_macro_history(values.get('PMI_MFG'), '')} |"
         )
-    return result or ["| 暂无官方历史数据 | — | — | — |"]
+    return result or ["本期未取得截至报告日已发布的官方宏观历史记录。"]
 
 
 def _format_macro_history(value: float | None, unit: str) -> str:
-    return "—" if value is None else f"{value:.1f}{unit}"
+    return "截至当日未取得发布值" if value is None else f"{value:.1f}{unit}"
 
 
 def _escape_markdown(value: str) -> str:
@@ -661,7 +693,7 @@ def _macro_unit(value: str) -> str:
 
 def _format_tenor(value) -> str:
     if value is None:
-        return "缺失"
+        return "原始记录未注明期限"
     return f"{int(value)} 天"
 
 
@@ -692,7 +724,7 @@ def _previous_values(
 
 def _format_bp_change(current: float, previous: float | None) -> str:
     if previous is None:
-        return "缺失"
+        return "无前一观测日同口径记录"
     return f"{(float(current) - float(previous)) * 100:+.1f} bp"
 
 
@@ -780,8 +812,15 @@ def _feature_panel_rows(feature_groups: dict) -> list[str]:
         if not isinstance(values, dict):
             continue
         for key, value in values.items():
-            rows.append(f"| {group_labels.get(group, group)} | {labels.get(key, key)} | {_format_feature_value(value)} |")
-    return rows or ["| 无 | 无 | 缺失 |"]
+            reason = "原始字段未取得，未计算"
+            if group == "open_market_operations":
+                reason = "未取得完整操作记录" if not values.get("operation_count") else "原始操作记录未提供该字段"
+            elif group in ("rates", "funding", "futures"):
+                reason = "所需行情或可比历史未齐"
+            elif group == "macro":
+                reason = "截至当日未取得发布值"
+            rows.append(f"| {group_labels.get(group, group)} | {labels.get(key, key)} | {_format_feature_value(value, reason)} |")
+    return rows or ["本期未保存原始特征明细。"]
 
 
 def _data_source_rows(data_sources: dict) -> list[str]:
@@ -800,9 +839,9 @@ def _data_source_rows(data_sources: dict) -> list[str]:
     return rows or ["| 无 | 无 |"]
 
 
-def _format_feature_value(value) -> str:
+def _format_feature_value(value, missing_reason="原始字段未取得，未计算") -> str:
     if value is None:
-        return "缺失"
+        return missing_reason
     if isinstance(value, float):
         return f"{value:.4f}"
     if isinstance(value, list):

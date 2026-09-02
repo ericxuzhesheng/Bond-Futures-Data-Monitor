@@ -59,8 +59,11 @@
   },
   "complete_rolling_windows": 221,
   "future_macro_rows": 0,
+  "report_table_cells_checked": 52272,
+  "activity_comparisons_recomputed": 644,
+  "unexplained_table_cells": 0,
   "missing_optional_dates": {
-    "open_market_operations": 11,
+    "open_market_operations": 15,
     "policy_news": 101,
     "treasury_issuance_calendar": 161,
     "yield_curve_comparisons": 160

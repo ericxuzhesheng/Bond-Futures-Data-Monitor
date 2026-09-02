@@ -329,3 +329,99 @@ def test_funding_chart_uses_20_dates_not_100_rows(tmp_path):
         lines = list(ET.parse(path).iter("{http://www.w3.org/2000/svg}polyline"))
         assert len(lines) == 5
         assert all(len(line.attrib["points"].split()) == 20 for line in lines)
+
+
+def test_activity_horizons_use_trading_observations_and_exclude_future(tmp_path):
+    from bond_futures_monitor.reports.daily_report import _multi_horizon_rows
+    with connect(tmp_path / "monitor.db") as conn:
+        init_db(conn)
+        for day, volume in (("2025-12-25", 230466), ("2025-12-26", 260316),
+                            ("2025-12-29", 396087), ("2025-12-30", 264620),
+                            ("2025-12-31", 316443), ("2026-01-05", 283295),
+                            ("2026-01-06", 999999)):
+            insert_futures_quotes(conn, [{"date": day, "contract": "T", "close_price": 100,
+                "daily_return": .001, "volume": volume, "open_interest": volume * 2,
+                "data_source": "real-source"}])
+        rows = _multi_horizon_rows(conn, "2026-01-05")
+    assert "| 总成交量 | 283,295 | -10.5% | +22.9% | 67% |" in rows
+    assert "| 总持仓量 | 566,590 | -10.5% | +22.9% | 67% |" in rows
+
+
+@pytest.mark.parametrize("values,periods,expected", [
+    ([100], 1, "样本不足（需2次观测）"),
+    ([100] * 5, 5, "样本不足（需6次观测）"),
+    ([0, 100], 1, "基期为0或负值，不可比"),
+    ([100, 0], 1, "-100.0%"),
+    ([100] * 6, 5, "+0.0%"),
+])
+def test_relative_change_explains_unavailable_values(values, periods, expected):
+    from bond_futures_monitor.reports.daily_report import _relative_change
+    assert _relative_change(values, periods) == expected
+
+
+@pytest.mark.parametrize("bad_cell", ["缺失", "—", "", "None", "NaN%", "-inf", "N/A"])
+def test_report_quality_gate_preserves_previous_report(tmp_path, monkeypatch, bad_cell):
+    import bond_futures_monitor.reports.daily_report as report
+    with connect(tmp_path / "monitor.db") as conn:
+        init_db(conn)
+        seed_real_source_rows(conn)
+        upsert_daily_market_signal(conn, generate_market_signal(build_daily_features(conn, RUN_DATE)))
+        target = tmp_path / f"{RUN_DATE}_daily_report.md"
+        target.write_text("previous complete report", encoding="utf-8")
+        monkeypatch.setattr(report, "_multi_horizon_rows", lambda *_: [f"| 总成交量 | 100 | 0% | {bad_cell} | 50% |"])
+        with pytest.raises(ValueError, match="Unexplained report cell"):
+            generate_daily_report(conn, RUN_DATE, tmp_path)
+        assert target.read_text(encoding="utf-8") == "previous complete report"
+
+
+def test_macro_gaps_and_optional_fields_have_reasons():
+    from bond_futures_monitor.reports.daily_report import (
+        _macro_history_table_rows, _feature_panel_rows, _format_bp_change,
+        _format_tenor, validate_report_tables,
+    )
+    rows = _macro_history_table_rows([{"period": "2025-12", "indicator": "PMI_MFG", "value": 50.1}])
+    assert rows == ["| 2025-12 | 截至当日未取得发布值 | 截至当日未取得发布值 | 50.1 |"]
+    rows += _feature_panel_rows({"open_market_operations": {"operation_count": 0, "omo_operation_rate": None}})
+    assert any("未取得完整操作记录" in row for row in rows)
+    assert _format_bp_change(1.5, None) == "无前一观测日同口径记录"
+    assert _format_tenor(None) == "原始记录未注明期限"
+    assert validate_report_tables("\n".join(rows)) > 0
+
+
+def test_report_validator_leaves_source_prose_unchanged():
+    from bond_futures_monitor.reports.daily_report import validate_report_tables
+    content = "原文—说明\n```text\n| 缺失 |\n```\n| 状态 | 未参与评分 |\n"
+    assert validate_report_tables(content) == 2
+
+
+def test_news_scope_repair_is_scoped_and_recoverable(tmp_path):
+    import json
+    from scripts.repair_omo_news_scope import repair
+    (tmp_path / "data" / f"backfill_2026_{RUN_DATE}").mkdir(parents=True)
+    output = tmp_path / "reports_output"
+    output.mkdir()
+    (output / "backfill_2026_manifest.json").write_text(
+        json.dumps({"completed": [RUN_DATE], "end": RUN_DATE}), encoding="utf-8")
+    database = tmp_path / "data/bond_futures_monitor.db"
+    title = "下周央行公开市场将有100亿元逆回购到期"
+    with connect(database) as conn:
+        init_db(conn)
+        seed_real_source_rows(conn)
+        insert_policy_news(conn, [{"date": RUN_DATE, "title": title, "content": title,
+            "url": "", "source": "财联社", "data_source": f"tushare_news_cls:{RUN_DATE}"}])
+        insert_open_market_operations(conn, [{"date": RUN_DATE, "operation_type": "reverse_repo",
+            "tenor_days": None, "operation_amount": 0, "maturity_amount": 100,
+            "net_injection_amount": -100, "operation_rate": None, "source_title": title,
+            "data_source": f"tushare_news_cls:{RUN_DATE}"}])
+    assert len(repair(tmp_path)["removed_records"]) == 1
+    with connect(database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM open_market_operations").fetchone()[0] == 2
+    assert repair(tmp_path, apply=True)["affected_dates"] == [RUN_DATE]
+    with connect(database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM open_market_operations").fetchone()[0] == 1
+        assert conn.execute("SELECT omo_net_injection_amount FROM daily_features").fetchone()[0] == 50
+    with connect(tmp_path / "data" / f"backfill_2026_{RUN_DATE}" / "before_report_cell_repair.db") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM open_market_operations").fetchone()[0] == 2
+    assert (output / "2026_omo_scope_repair.json").exists()
+    manifest = json.loads((output / "backfill_2026_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["missing_optional_dates"]["open_market_operations"] == []

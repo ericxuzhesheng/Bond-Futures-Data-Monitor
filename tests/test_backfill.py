@@ -133,8 +133,8 @@ def test_first_day_report_does_not_invent_five_day_return_or_average(tmp_path):
         db.init_db(conn)
         db.insert_futures_quotes(conn, [{"date": "2026-01-05", "contract": "T", "close_price": 100,
             "daily_return": .001, "volume": 100, "open_interest": 200, "data_source": "real-source"}])
-        assert "| 缺失 | 缺失 | 数据不足 |" in _futures_position_rows(conn, "2026-01-05")[0]
-        assert "| 期货平均收益 | +0.100% | +0.100% | 缺失 |" in "\n".join(_multi_horizon_rows(conn, "2026-01-05"))
+        assert "| 无历史观测，未计算均值 | 无历史观测，未计算均值 | 无可比持仓，未判定 |" in _futures_position_rows(conn, "2026-01-05")[0]
+        assert "| 期货平均收益 | +0.100% | +0.100% | 样本不足（需5次观测） |" in "\n".join(_multi_horizon_rows(conn, "2026-01-05"))
 
 
 def test_chinabond_fallback_is_exact_date_and_labels_interpolation(tmp_path):

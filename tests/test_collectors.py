@@ -157,6 +157,29 @@ def test_parse_omo_text_handles_maturity_only_as_net_withdrawal():
     assert rows[0]["net_injection_amount"] == -110.0
 
 
+@pytest.mark.parametrize("text", [
+    "下周央行公开市场将有22655亿元逆回购到期。",
+    "本周央行开展620亿元逆回购操作，本周净回笼6165亿元。",
+    "央行将在7月29日至7月31日开展隔夜逆回购操作，每日6000亿元。",
+    "央行公告，7月15日将以固定数量、利率招标方式开展14000亿元买断式逆回购操作。",
+])
+def test_omo_does_not_treat_aggregate_or_planned_operations_as_today(text):
+    assert parse_omo_text("2026-07-15", "央行公开市场消息", text, "cls") == []
+
+
+def test_omo_rate_does_not_capture_unrelated_probability():
+    rows = parse_omo_text("2026-07-27", "央行逆回购操作",
+        "央行开展100亿元7天期逆回购操作。美联储维持利率不变的概率为65.3%。", "cls")
+    assert rows[0]["operation_rate"] is None
+
+
+def test_omo_keeps_current_maturity_when_digest_also_has_future_plans():
+    rows = parse_omo_text("2026-07-29", "投资日历",
+        "今日有760亿元7天期逆回购到期。央行将在下周开展6000亿元隔夜逆回购操作。", "cls")
+    assert rows[0]["tenor_days"] == 7
+    assert rows[0]["maturity_amount"] == 760
+
+
 def test_require_float_rejects_missing_and_nan_values():
     assert _require_float("102.5", "close", "T") == 102.5
     assert _require_float(0, "volume", "T") == 0.0

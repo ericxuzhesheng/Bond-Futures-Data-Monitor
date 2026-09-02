@@ -214,6 +214,18 @@ def parse_omo_text(run_date: str, title: str, content: str, data_source: str) ->
     text = _normalize_text(f"{title} {content}")
     if not _is_omo_relevant(text):
         return []
+    # Keep current-operation clauses only. News digests can mix a genuine
+    # same-day maturity with future plans and unrelated interest-rate stories.
+    # A publication date is not an operation date.
+    clauses = []
+    for clause in re.split(r"[。；;]|(?=\d+、)", text):
+        if re.search(r"下周|本周|上周|本月|下月|将(?:在|于|以|开展)|拟开展", clause):
+            continue
+        if "逆回购" in clause or (clauses and re.search(r"净投放|净回笼|净回收|操作利率|中标利率", clause)):
+            clauses.append(clause)
+    text = "。".join(clauses)
+    if not text:
+        return []
 
     rows: list[dict[str, object]] = []
     operation_amount = _amount_before(text, ("逆回购操作", "买断式逆回购操作", "开展"))
@@ -325,13 +337,13 @@ def _tenor_days(text: str) -> int | None:
 
 def _operation_rate(text: str) -> float | None:
     patterns = (
-        r"操作利率[^。；;]{0,10}?(\d+(?:\.\d+)?)%",
-        r"利率[^。；;]{0,10}?(\d+(?:\.\d+)?)%",
+        r"(?:操作利率|中标利率|逆回购利率)[^。；;]{0,10}?(\d+(?:\.\d+)?)%",
     )
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
-            return float(match.group(1))
+            value = float(match.group(1))
+            return value if 0 <= value <= 20 else None
     return None
 
 

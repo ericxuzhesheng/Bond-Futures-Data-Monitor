@@ -960,6 +960,14 @@ block report regeneration instead of silently publishing underfilled windows.
 Funding scoring consistently prefers the public FDR007 fixing history; weighted
 DR/R quotes remain separately displayed when available, never spliced into FDR/FR.
 
+Report generation rejects unexplained empty cells, placeholder dashes, `缺失`,
+and non-finite values before writing the Markdown file. Volume and open-interest
+five-session changes use the observation five trading sessions earlier, not five
+calendar days. Genuine unavailable comparisons explain their missing input;
+unpublished/uncollected macro observations are never filled using future releases.
+Use `python -m scripts.verify_warmup --render-reports` to rerender the stored 2026
+reports and check every table, warmed-up market panel, and activity comparison.
+
 Shared histories and per-day responses are cached under `data/backfill_*` for
 resumption. A SQLite backup is made there before the first rebuild. Failed days
 keep their old database snapshot and are listed in
