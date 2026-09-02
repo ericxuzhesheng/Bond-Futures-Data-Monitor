@@ -192,46 +192,64 @@ def test_daily_report_generation(tmp_path):
 
     content = report_path.read_text(encoding="utf-8")
     assert report_path.exists()
-    assert "每日市场判断" in content
-    assert "## 市场结构提示" in content
-    assert "期货强弱：" in content
-    assert "资金锚：DR007" in content
-    assert "数据真实性检查" in content
-    assert "## 公开市场操作概览" in content
+    assert content.startswith("# 国债期货日报\n")
+    assert "## 当日简评" in content
+    assert "DR007 为 1.500%" in content
     assert "公开市场操作利率" in content
-    assert "| 类型 | 期限 | 投放 | 到期 | 净投放 | 来源标题 |" in content
-    assert "当日真实数据合计" in content
-    assert "国债期货概览" in content
-    assert "| 期限 | 收益率 | 较上一期 |" in content
-    assert "| 指标 | 利率 | 较上一期 |" in content
-    assert "政策与新闻结构化解读" in content
-    assert "原始标题：央行公开市场净投放呵护流动性" in content
-    assert "原始标题：财政部安排超长期特别国债资金支持城市更新" in content
-    assert "数据库写入结果" in content
-    assert "open_market_operations: 1 rows" in content
+    assert "| 类型 | 期限 | 投放 | 到期 | 净投放 |" in content
+    assert "| 期限 | 收益率 | 较上一观测日 |" in content
+    assert "| 指标 | 利率 | 较上一观测日 |" in content
+    assert "央行公开市场净投放呵护流动性" in content
+    assert "财政部安排超长期特别国债资金支持城市更新" in content
     assert "run_status: success" in content
-    assert "## 宏观基本面概览" in content
     assert "| 制造业 PMI | 49.20 | 2026-05 |" in content
     assert "| LPR 1年期 | 3.00% | 2026-05-20 |" in content
-    assert "macro_indicators: 5 rows" in content
-    assert "## 近6期国家统计局宏观趋势" in content
     assert "| 2026-05 | 0.5% | -2.1% | 49.2 |" in content
-    assert "## 财政部国债发行日历" in content
     assert "| 2026-06-09 | 10Y | 900 亿元 |" in content
-    assert "## 中债—CFETS 收益率曲线偏差监测" in content
     assert "| 10Y | 1.9000% | 1.9010% | +0.10 bp | 2026-06-08 |" in content
-    assert "macro_history: 18 rows" in content
-    assert "treasury_issuance_calendar: 1 rows" in content
-    assert "yield_curve_comparisons: 5 rows" in content
+    assert "macro_history: 18" in content
+    assert "treasury_issuance_calendar: 1" in content
+    assert "yield_curve_comparisons: 5" in content
     for category in ["利率方向", "曲线形态", "资金面", "公开市场操作", "期货量价", "文本信号", "宏观基本面"]:
         assert f"| {category} |" in content
-    assert "sample" not in content.lower()
-    assert "## 30秒执行摘要" in content
-    assert "## 核心多周期面板" in content
-    assert "## 期货量价与持仓" in content
-    assert "## 历史信号检验（探索性）" in content
+    assert content.count("<details>") == content.count("</details>") == 5
+    assert content.index("## 期货表现") < content.index("futures_20d.svg") < content.index("## 利率与资金")
+    assert content.index("### 资金利率") < content.index("funding_20d.svg") < content.index("## 宏观与后续观察")
+    assert "## 30秒执行摘要" not in content
+    assert "## 每日市场判断" not in content
+    assert content.index("tushare_yc_cb:") > content.index("## 方法与数据附录")
+    assert "—" not in content
     assets = report_dir / "assets"
     assert len(list(assets.glob(f"{RUN_DATE}_*.svg"))) == 4
+
+
+def test_missing_calendar_is_not_reported_as_zero_issuance(tmp_path):
+    with connect(tmp_path / "monitor.db") as conn:
+        init_db(conn)
+        seed_real_source_rows(conn)
+        conn.execute("DELETE FROM treasury_issuance_calendar")
+        features = build_daily_features(conn, RUN_DATE)
+        upsert_daily_market_signal(conn, generate_market_signal(features))
+        before = conn.total_changes
+        path = generate_daily_report(conn, RUN_DATE, tmp_path / "reports")
+        assert conn.total_changes == before
+    content = path.read_text(encoding="utf-8")
+    assert "发行规模和净融资暂不列数" in content
+    assert "计划发行额：0" not in content
+    assert "### 政策与新闻" not in content
+
+
+def test_chart_series_share_the_same_date_positions():
+    from bond_futures_monitor.reports.charts import _svg_chart_body
+    import xml.etree.ElementTree as ET
+    body = _svg_chart_body(760, 360, "测试", {
+        "完整": [("08-28", 1.0), ("08-31", 1.1), ("09-01", 1.2)],
+        "短序列": [("09-01", 1.3)],
+    }, 45)
+    root = ET.fromstring("<svg>" + body + "</svg>")
+    lines = root.findall("polyline")
+    assert lines[0].attrib["points"].split()[-1].split(",")[0] == lines[1].attrib["points"].split(",")[0]
+    assert root.findall("circle")
 
 
 def test_features_use_latest_ai_signal_per_news_item(tmp_path):
