@@ -60,6 +60,40 @@ CREATE TABLE IF NOT EXISTS macro_indicators (
     PRIMARY KEY (date, indicator)
 );
 
+CREATE TABLE IF NOT EXISTS macro_history (
+    date TEXT NOT NULL,
+    indicator TEXT NOT NULL,
+    period TEXT NOT NULL,
+    value REAL NOT NULL,
+    release_date TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    data_source TEXT NOT NULL,
+    PRIMARY KEY (date, indicator, period)
+);
+
+CREATE TABLE IF NOT EXISTS treasury_issuance_calendar (
+    date TEXT NOT NULL,
+    auction_date TEXT NOT NULL,
+    title TEXT NOT NULL,
+    tenor TEXT NOT NULL,
+    planned_amount REAL NOT NULL,
+    source_url TEXT NOT NULL,
+    data_source TEXT NOT NULL,
+    PRIMARY KEY (date, auction_date, title)
+);
+
+CREATE TABLE IF NOT EXISTS yield_curve_comparisons (
+    date TEXT NOT NULL,
+    observation_date TEXT NOT NULL,
+    tenor TEXT NOT NULL,
+    chinabond_yield REAL NOT NULL,
+    cfets_yield REAL NOT NULL,
+    deviation_bp REAL NOT NULL,
+    chinabond_source TEXT NOT NULL,
+    cfets_source TEXT NOT NULL,
+    PRIMARY KEY (date, tenor)
+);
+
 CREATE TABLE IF NOT EXISTS policy_news (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     date TEXT NOT NULL,
@@ -349,6 +383,61 @@ def log_run(conn: sqlite3.Connection, run_date: str, status: str, message: str) 
     conn.commit()
 
 
+def insert_macro_history(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
+    return _insert_many(
+        conn,
+        """
+        INSERT INTO macro_history
+        (date, indicator, period, value, release_date, source_url, data_source)
+        VALUES (:date, :indicator, :period, :value, :release_date, :source_url, :data_source)
+        ON CONFLICT(date, indicator, period) DO UPDATE SET
+            value=excluded.value,
+            release_date=excluded.release_date,
+            source_url=excluded.source_url,
+            data_source=excluded.data_source
+        """,
+        rows,
+    )
+
+
+def insert_treasury_issuance_calendar(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
+    return _insert_many(
+        conn,
+        """
+        INSERT INTO treasury_issuance_calendar
+        (date, auction_date, title, tenor, planned_amount, source_url, data_source)
+        VALUES (:date, :auction_date, :title, :tenor, :planned_amount, :source_url, :data_source)
+        ON CONFLICT(date, auction_date, title) DO UPDATE SET
+            tenor=excluded.tenor,
+            planned_amount=excluded.planned_amount,
+            source_url=excluded.source_url,
+            data_source=excluded.data_source
+        """,
+        rows,
+    )
+
+
+def insert_yield_curve_comparisons(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
+    return _insert_many(
+        conn,
+        """
+        INSERT INTO yield_curve_comparisons
+        (date, observation_date, tenor, chinabond_yield, cfets_yield, deviation_bp,
+         chinabond_source, cfets_source)
+        VALUES (:date, :observation_date, :tenor, :chinabond_yield, :cfets_yield, :deviation_bp,
+                :chinabond_source, :cfets_source)
+        ON CONFLICT(date, tenor) DO UPDATE SET
+            observation_date=excluded.observation_date,
+            chinabond_yield=excluded.chinabond_yield,
+            cfets_yield=excluded.cfets_yield,
+            deviation_bp=excluded.deviation_bp,
+            chinabond_source=excluded.chinabond_source,
+            cfets_source=excluded.cfets_source
+        """,
+        rows,
+    )
+
+
 def purge_daily_data_for_date(conn: sqlite3.Connection, run_date: str) -> None:
     """Remove one run date before refreshing all raw and derived real-data rows."""
 
@@ -369,6 +458,9 @@ def purge_daily_data_for_date(conn: sqlite3.Connection, run_date: str) -> None:
     conn.execute("DELETE FROM funding_rates WHERE date = ?", (run_date,))
     conn.execute("DELETE FROM open_market_operations WHERE date = ?", (run_date,))
     conn.execute("DELETE FROM macro_indicators WHERE date = ?", (run_date,))
+    conn.execute("DELETE FROM macro_history WHERE date = ?", (run_date,))
+    conn.execute("DELETE FROM treasury_issuance_calendar WHERE date = ?", (run_date,))
+    conn.execute("DELETE FROM yield_curve_comparisons WHERE date = ?", (run_date,))
 
 
 def purge_superseded_ai_signals_for_date(conn: sqlite3.Connection, run_date: str) -> None:
@@ -400,6 +492,9 @@ def fetch_table_for_date(conn: sqlite3.Connection, table: str, date: str) -> lis
         "funding_rates",
         "open_market_operations",
         "macro_indicators",
+        "macro_history",
+        "treasury_issuance_calendar",
+        "yield_curve_comparisons",
         "ai_text_signals",
         "daily_features",
         "daily_market_signals",

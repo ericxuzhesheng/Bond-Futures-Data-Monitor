@@ -98,9 +98,9 @@ def _collect_tushare(run_date: str) -> list[dict[str, object]]:
 def _collect_akshare(run_date: str) -> list[dict[str, object]]:
     """Try AkShare sources in order of reliability for the five required tenors.
 
-    1. bond_china_close_return — China Central Depository curve, all five tenors
-       present natively, ~2s. Primary fallback.
-    2. bond_china_yield — same CCDC data via a different endpoint; 2Y is
+    1. bond_china_close_return — ChinaMoney/CFETS closing curve, all five tenors
+       present natively. Primary fallback.
+    2. bond_china_yield — ChinaBond/CCDC data via a separate endpoint; 2Y is
        interpolated from 1Y/3Y. Secondary fallback for endpoint outages.
 
     bond_zh_us_rate (Eastmoney, cross-provider) is intentionally not used: it

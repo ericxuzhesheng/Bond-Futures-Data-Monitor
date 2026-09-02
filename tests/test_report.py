@@ -9,8 +9,11 @@ from bond_futures_monitor.database import (
     insert_funding_rates,
     insert_futures_quotes,
     insert_macro_indicators,
+    insert_macro_history,
     insert_open_market_operations,
     insert_policy_news,
+    insert_treasury_issuance_calendar,
+    insert_yield_curve_comparisons,
     log_run,
     upsert_daily_features,
     upsert_daily_market_signal,
@@ -119,6 +122,57 @@ def seed_real_source_rows(conn, run_date: str = RUN_DATE) -> None:
             },
         ],
     )
+    insert_macro_history(
+        conn,
+        [
+            {
+                "date": run_date,
+                "indicator": indicator,
+                "period": period,
+                "value": value,
+                "release_date": run_date,
+                "source_url": "https://www.stats.gov.cn/sj/zxfb/test.html",
+                "data_source": "nbs_official_release",
+            }
+            for period, cpi, ppi, pmi in [
+                ("2026-05", 0.5, -2.1, 49.2),
+                ("2026-04", 0.3, -2.5, 49.0),
+                ("2026-03", 0.1, -2.7, 50.1),
+                ("2026-02", -0.2, -2.8, 49.5),
+                ("2026-01", 0.0, -2.9, 49.3),
+                ("2025-12", 0.2, -2.6, 50.0),
+            ]
+            for indicator, value in (("CPI_YOY", cpi), ("PPI_YOY", ppi), ("PMI_MFG", pmi))
+        ],
+    )
+    insert_treasury_issuance_calendar(
+        conn,
+        [{
+            "date": run_date,
+            "auction_date": "2026-06-09",
+            "title": "关于2026年记账式附息国债发行工作有关事宜的通知",
+            "tenor": "10Y",
+            "planned_amount": 900.0,
+            "source_url": "https://www.mof.gov.cn/test.html",
+            "data_source": "mof_official_notice",
+        }],
+    )
+    insert_yield_curve_comparisons(
+        conn,
+        [
+            {
+                "date": run_date,
+                "observation_date": run_date,
+                "tenor": tenor,
+                "chinabond_yield": value,
+                "cfets_yield": value + 0.001,
+                "deviation_bp": 0.1,
+                "chinabond_source": f"akshare_chinabond_curve:{run_date}",
+                "cfets_source": f"akshare_chinamoney_cfets_curve:{run_date}",
+            }
+            for tenor, value in (("1Y", 1.4), ("3Y", 1.6), ("5Y", 1.7), ("10Y", 1.9), ("30Y", 2.2))
+        ],
+    )
 
 
 def test_daily_report_generation(tmp_path):
@@ -160,6 +214,15 @@ def test_daily_report_generation(tmp_path):
     assert "| 制造业 PMI | 49.20 | 2026-05 |" in content
     assert "| LPR 1年期 | 3.00% | 2026-05-20 |" in content
     assert "macro_indicators: 5 rows" in content
+    assert "## 近6期国家统计局宏观趋势" in content
+    assert "| 2026-05 | 0.5% | -2.1% | 49.2 |" in content
+    assert "## 财政部国债发行日历" in content
+    assert "| 2026-06-09 | 10Y | 900 亿元 |" in content
+    assert "## 中债—CFETS 收益率曲线偏差监测" in content
+    assert "| 10Y | 1.9000% | 1.9010% | +0.10 bp | 2026-06-08 |" in content
+    assert "macro_history: 18 rows" in content
+    assert "treasury_issuance_calendar: 1 rows" in content
+    assert "yield_curve_comparisons: 5 rows" in content
     for category in ["利率方向", "曲线形态", "资金面", "公开市场操作", "期货量价", "文本信号", "宏观基本面"]:
         assert f"| {category} |" in content
     assert "sample" not in content.lower()

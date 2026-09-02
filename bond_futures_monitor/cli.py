@@ -8,11 +8,14 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from bond_futures_monitor.ai.text_signal import classify_news_item
+from bond_futures_monitor.collectors.curve_comparison import collect_yield_curve_comparison
 from bond_futures_monitor.collectors.funding import collect_funding_rates
 from bond_futures_monitor.collectors.futures import collect_futures_quotes
 from bond_futures_monitor.collectors.macro import collect_macro_indicators
+from bond_futures_monitor.collectors.macro_history import collect_nbs_macro_history
 from bond_futures_monitor.collectors.open_market import collect_open_market_operations
 from bond_futures_monitor.collectors.policy_news import collect_policy_news
+from bond_futures_monitor.collectors.treasury_calendar import collect_treasury_issuance_calendar
 from bond_futures_monitor.collectors.yield_curve import collect_bond_yields
 from bond_futures_monitor.config import get_settings
 from bond_futures_monitor.database import (
@@ -24,8 +27,11 @@ from bond_futures_monitor.database import (
     insert_funding_rates,
     insert_futures_quotes,
     insert_macro_indicators,
+    insert_macro_history,
     insert_open_market_operations,
     insert_policy_news,
+    insert_treasury_issuance_calendar,
+    insert_yield_curve_comparisons,
     log_run,
     purge_daily_data_for_date,
     purge_superseded_ai_signals_for_date,
@@ -116,6 +122,9 @@ def run_daily_pipeline(conn, run_date: str, use_live_data: bool, reports_output_
         insert_open_market_operations(conn, collect_open_market_operations(run_date, use_live_data))
         insert_policy_news(conn, collect_policy_news(run_date, use_live_data))
         insert_macro_indicators(conn, collect_macro_indicators(run_date, use_live_data))
+        insert_macro_history(conn, collect_nbs_macro_history(run_date))
+        insert_treasury_issuance_calendar(conn, collect_treasury_issuance_calendar(run_date))
+        insert_yield_curve_comparisons(conn, collect_yield_curve_comparison(run_date))
         validate_real_data_coverage(conn, run_date)
 
         signals = [classify_news_item(dict(row)) for row in fetch_policy_news(conn, run_date)]

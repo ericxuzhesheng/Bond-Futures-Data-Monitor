@@ -19,6 +19,15 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     ).fetchall()
     news = conn.execute("SELECT * FROM policy_news WHERE date = ? ORDER BY id", (run_date,)).fetchall()
     macro = conn.execute("SELECT * FROM macro_indicators WHERE date = ? ORDER BY indicator", (run_date,)).fetchall()
+    macro_history = conn.execute(
+        "SELECT * FROM macro_history WHERE date = ? ORDER BY period DESC, indicator", (run_date,)
+    ).fetchall()
+    treasury_calendar = conn.execute(
+        "SELECT * FROM treasury_issuance_calendar WHERE date = ? ORDER BY auction_date, tenor", (run_date,)
+    ).fetchall()
+    curve_comparison = conn.execute(
+        "SELECT * FROM yield_curve_comparisons WHERE date = ? ORDER BY CAST(tenor AS INTEGER)", (run_date,)
+    ).fetchall()
     ai = conn.execute(
         """
         SELECT signal.*, news.title AS news_title, news.source AS news_source
@@ -52,7 +61,10 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     prior_yields = _previous_values(conn, "bond_yields", "tenor", "yield_value", run_date)
     prior_funding = _previous_values(conn, "funding_rates", "rate_name", "rate_value", run_date)
 
-    raw_count = len(futures) + len(yields) + len(funding) + len(omo) + len(news) + len(macro)
+    raw_count = (
+        len(futures) + len(yields) + len(funding) + len(omo) + len(news) + len(macro)
+        + len(macro_history) + len(treasury_calendar) + len(curve_comparison)
+    )
     lines = [
         f"# 中国国债期货每日真实数据监控报告 - {run_date}",
         "",
@@ -72,6 +84,9 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         f"- 公开市场操作：{len(omo)} 条",
         f"- 政策/新闻文本：{len(news)} 条",
         f"- 宏观基本面指标：{len(macro)} 条",
+        f"- 国家统计局宏观历史：{len(macro_history)} 条",
+        f"- 财政部国债发行日历：{len(treasury_calendar)} 条",
+        f"- 中债—CFETS 曲线核验：{len(curve_comparison)} 条",
         f"- 当日真实数据合计：{raw_count} 条",
         "- 生产流程禁止非真实数据；覆盖不足会直接失败。",
         "",
@@ -104,6 +119,21 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         for row in yields
     )
 
+    lines.extend([
+        "", "## 中债—CFETS 收益率曲线偏差监测",
+        "| 期限 | 中债 | CFETS | CFETS − 中债 | 数据日 |",
+        "|---|---:|---:|---:|---|",
+    ])
+    if curve_comparison:
+        lines.extend(
+            f"| {row['tenor']} | {row['chinabond_yield']:.4f}% | {row['cfets_yield']:.4f}% | "
+            f"{row['deviation_bp']:+.2f} bp | {row['observation_date']} |"
+            for row in curve_comparison
+        )
+    else:
+        lines.append("| 无可比数据 | — | — | — | — |")
+    lines.append("- 该偏差用于交叉核验发布与拟合口径，不进入每日方向评分，也不代表任一来源错误。")
+
     lines.extend(["", "## 资金面概览", "| 指标 | 利率 | 较上一期 |", "|---|---:|---:|"])
     lines.extend(
         f"| {row['rate_name']} | {row['rate_value']:.3f}% | "
@@ -118,6 +148,29 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         for row in macro
     )
     lines.append("- 宏观指标按月度/不定期发布，记录的是运行日可得的最新一期数据。")
+
+    lines.extend([
+        "", "## 近6期国家统计局宏观趋势",
+        "| 数据期 | CPI 同比 | PPI 同比 | 制造业 PMI |",
+        "|---|---:|---:|---:|",
+    ])
+    lines.extend(_macro_history_table_rows(macro_history))
+    lines.append("- 数据来自国家统计局数据发布页，并按日报运行日截断，避免使用事后发布信息。")
+
+    lines.extend([
+        "", "## 财政部国债发行日历",
+        "| 招标日 | 期限 | 计划发行额 | 官方通知 |",
+        "|---|---:|---:|---|",
+    ])
+    if treasury_calendar:
+        lines.extend(
+            f"| {row['auction_date']} | {row['tenor']} | {row['planned_amount']:.0f} 亿元 | "
+            f"[{_escape_markdown(row['title'])}]({row['source_url']}) |"
+            for row in treasury_calendar
+        )
+    else:
+        lines.append("| 暂无已公告安排 | — | — | — |")
+    lines.append("- 展示运行日前财政部已发布、且招标日在运行日前3日至后14日内的记账式国债安排。")
 
     lines.extend(
         [
@@ -177,6 +230,9 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
             f"- open_market_operations: {db_status['open_market_operations']} rows",
             f"- policy_news: {db_status['policy_news']} rows",
             f"- macro_indicators: {db_status['macro_indicators']} rows",
+            f"- macro_history: {db_status['macro_history']} rows",
+            f"- treasury_issuance_calendar: {db_status['treasury_issuance_calendar']} rows",
+            f"- yield_curve_comparisons: {db_status['yield_curve_comparisons']} rows",
             f"- ai_text_signals: {db_status['ai_text_signals']} rows",
             f"- daily_features: {db_status['daily_features']} row",
             f"- daily_market_signals: {db_status['daily_market_signals']} row",
@@ -208,6 +264,9 @@ def _database_write_status(conn: sqlite3.Connection, run_date: str) -> dict[str,
         "open_market_operations",
         "policy_news",
         "macro_indicators",
+        "macro_history",
+        "treasury_issuance_calendar",
+        "yield_curve_comparisons",
         "ai_text_signals",
         "daily_features",
         "daily_market_signals",
@@ -221,6 +280,29 @@ def _database_write_status(conn: sqlite3.Connection, run_date: str) -> dict[str,
     ).fetchone()
     result["run_status"] = run_log["status"] if run_log else "unknown"
     return result
+
+
+def _macro_history_table_rows(rows) -> list[str]:
+    by_period: dict[str, dict[str, float]] = {}
+    for row in rows:
+        by_period.setdefault(str(row["period"]), {})[str(row["indicator"])] = float(row["value"])
+    result = []
+    for period in sorted(by_period, reverse=True)[:6]:
+        values = by_period[period]
+        result.append(
+            f"| {period} | {_format_macro_history(values.get('CPI_YOY'), '%')} | "
+            f"{_format_macro_history(values.get('PPI_YOY'), '%')} | "
+            f"{_format_macro_history(values.get('PMI_MFG'), '')} |"
+        )
+    return result or ["| 暂无官方历史数据 | — | — | — |"]
+
+
+def _format_macro_history(value: float | None, unit: str) -> str:
+    return "—" if value is None else f"{value:.1f}{unit}"
+
+
+def _escape_markdown(value: str) -> str:
+    return str(value).replace("|", "\\|").replace("[", "\\[").replace("]", "\\]")
 
 
 def _market_view_label(value: str) -> str:

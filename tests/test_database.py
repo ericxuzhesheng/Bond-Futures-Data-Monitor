@@ -29,6 +29,9 @@ def test_database_initialization(tmp_path):
         tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
     assert "futures_quotes" in tables
     assert "open_market_operations" in tables
+    assert "macro_history" in tables
+    assert "treasury_issuance_calendar" in tables
+    assert "yield_curve_comparisons" in tables
     assert "daily_market_signals" in tables
     assert "run_log" in tables
 
