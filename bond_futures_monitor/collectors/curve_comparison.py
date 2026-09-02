@@ -6,6 +6,8 @@ import logging
 from datetime import date as Date
 from datetime import timedelta
 
+from bond_futures_monitor.collectors.status import CollectionResult
+
 
 logger = logging.getLogger(__name__)
 TENORS = {1.0: "1Y", 3.0: "3Y", 5.0: "5Y", 10.0: "10Y", 30.0: "30Y"}
@@ -19,6 +21,17 @@ def collect_yield_curve_comparison(run_date: str) -> list[dict[str, object]]:
     except Exception:
         logger.warning("ChinaBond-CFETS curve comparison is unavailable for %s.", run_date, exc_info=True)
         return []
+
+
+def collect_yield_curve_comparison_result(run_date: str) -> CollectionResult[dict[str, object]]:
+    try:
+        rows = _collect_yield_curve_comparison(run_date)
+    except Exception as exc:
+        logger.warning("ChinaBond-CFETS curve comparison is unavailable for %s.", run_date, exc_info=True)
+        return CollectionResult([], "unavailable", "chinabond+cfets", str(exc))
+    observation = str(rows[0]["observation_date"]) if rows else None
+    message = "中债与 CFETS 共同日曲线齐全" if rows else "10 日回溯窗口内无完整共同观测"
+    return CollectionResult(rows, "ok" if rows else "unavailable", "chinabond+cfets", message, observation)
 
 
 def _collect_yield_curve_comparison(run_date: str) -> list[dict[str, object]]:

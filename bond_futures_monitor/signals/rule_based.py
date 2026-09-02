@@ -33,6 +33,20 @@ def generate_market_signal(features: dict[str, Any]) -> dict[str, Any]:
     if not drivers:
         drivers.append("全部评分维度均处于中性区间。")
 
+    available = [item for item in score_items if item.get("available", True)]
+    directional = [item for item in available if item["score"] != 0]
+    positive = [item for item in directional if item["score"] > 0]
+    negative = [item for item in directional if item["score"] < 0]
+    coverage = len(available) / len(score_items) if score_items else 0.0
+    agreement = max(len(positive), len(negative)) / len(directional) if directional else 0.5
+    confidence = round(100 * coverage * (0.6 + 0.4 * agreement))
+    conflicts = []
+    if positive and negative:
+        conflicts.append(
+            f"多空信号并存：偏多 {len(positive)} 项，偏空 {len(negative)} 项，信号一致性有限。"
+        )
+    bias = "偏多" if score > 0 else "偏空" if score < 0 else "均衡"
+
     return {
         "date": features["date"],
         "total_score": score,
@@ -43,18 +57,25 @@ def generate_market_signal(features: dict[str, Any]) -> dict[str, Any]:
             "score_items": score_items,
             "score_summary": _summarize_score_items(score_items),
             "feature_snapshot": features,
+            "confidence": confidence,
+            "coverage": coverage,
+            "directional_bias": bias,
+            "conflicts": conflicts,
         },
     }
 
 
 def _score_rates(score_items: list[dict[str, Any]], features: dict[str, Any]) -> None:
     value = features.get("yield_10y_change")
+    percentile = features.get("details", {}).get("rolling_context", {}).get("yield_10y_change_percentile_60d")
     if value is None:
         _add_score(score_items, "利率方向", 0, "缺少上一期 10Y 收益率，利率方向暂不计分。")
-    elif value <= -0.01:
-        _add_score(score_items, "利率方向", 2, "10Y 收益率明显下行，支撑国债期货。")
-    elif value >= 0.01:
-        _add_score(score_items, "利率方向", -2, "10Y 收益率明显上行，压制国债期货。")
+    elif (percentile is not None and percentile <= 0.2) or value <= -0.01:
+        suffix = f"（60日分位 {percentile:.0%}）" if percentile is not None else ""
+        _add_score(score_items, "利率方向", 2, f"10Y 收益率显著下行{suffix}，支撑国债期货。")
+    elif (percentile is not None and percentile >= 0.8) or value >= 0.01:
+        suffix = f"（60日分位 {percentile:.0%}）" if percentile is not None else ""
+        _add_score(score_items, "利率方向", -2, f"10Y 收益率显著上行{suffix}，压制国债期货。")
     else:
         _add_score(score_items, "利率方向", 0, "10Y 收益率变化未超过方向阈值。")
 
@@ -73,6 +94,7 @@ def _score_curve(score_items: list[dict[str, Any]], features: dict[str, Any]) ->
 
 def _score_funding(score_items: list[dict[str, Any]], risks: list[str], features: dict[str, Any]) -> None:
     value = features.get("dr007_change")
+    percentile = features.get("details", {}).get("rolling_context", {}).get("funding_change_percentile_60d")
     anchor = (
         features.get("details", {})
         .get("feature_groups", {})
@@ -84,9 +106,9 @@ def _score_funding(score_items: list[dict[str, Any]], risks: list[str], features
         message = f"缺少上一交易日 {anchor}，资金面变化项暂不计分。"
         _add_score(score_items, "资金面", 0, message)
         risks.append(message)
-    elif value <= -0.03:
+    elif (percentile is not None and percentile <= 0.2) or value <= -0.03:
         _add_score(score_items, "资金面", 1, f"{anchor} 下行，银行间资金面边际转松。")
-    elif value >= 0.03:
+    elif (percentile is not None and percentile >= 0.8) or value >= 0.03:
         _add_score(score_items, "资金面", -1, f"{anchor} 上行，银行间资金面边际收紧。")
     else:
         _add_score(score_items, "资金面", 0, f"{anchor} 变化未超过方向阈值。")
@@ -119,7 +141,8 @@ def _score_futures(score_items: list[dict[str, Any]], features: dict[str, Any]) 
 
 def _score_text(score_items: list[dict[str, Any]], features: dict[str, Any]) -> None:
     value = features.get("avg_ai_sentiment_score")
-    if value is None:
+    signal_count = features.get("details", {}).get("ai_signal_count")
+    if value is None or signal_count == 0:
         _add_score(score_items, "文本信号", 0, "缺少政策/新闻文本信号，文本项暂不计分。")
     elif value > 0.25:
         _add_score(score_items, "文本信号", 1, "政策与新闻文本信号整体偏多。")
@@ -143,7 +166,17 @@ def _score_macro(score_items: list[dict[str, Any]], features: dict[str, Any]) ->
 
 
 def _add_score(score_items: list[dict[str, Any]], category: str, score: float, reason: str) -> None:
-    score_items.append({"category": category, "score": score, "reason": reason})
+    weights = {"利率方向": 2.0, "曲线形态": 0.5, "资金面": 1.0, "公开市场操作": 1.0,
+               "期货量价": 1.0, "文本信号": 1.0, "宏观基本面": 0.5}
+    unavailable = reason.startswith("缺少")
+    score_items.append({
+        "category": category,
+        "score": score,
+        "raw_score": score / weights.get(category, 1.0) if weights.get(category, 1.0) else score,
+        "weight": weights.get(category, 1.0),
+        "available": not unavailable,
+        "reason": reason,
+    })
 
 
 def _summarize_score_items(score_items: list[dict[str, Any]]) -> dict[str, float]:

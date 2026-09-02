@@ -226,6 +226,12 @@ def test_daily_report_generation(tmp_path):
     for category in ["利率方向", "曲线形态", "资金面", "公开市场操作", "期货量价", "文本信号", "宏观基本面"]:
         assert f"| {category} |" in content
     assert "sample" not in content.lower()
+    assert "## 30秒执行摘要" in content
+    assert "## 核心多周期面板" in content
+    assert "## 期货量价与持仓" in content
+    assert "## 历史信号检验（探索性）" in content
+    assets = report_dir / "assets"
+    assert len(list(assets.glob(f"{RUN_DATE}_*.svg"))) == 4
 
 
 def test_features_use_latest_ai_signal_per_news_item(tmp_path):

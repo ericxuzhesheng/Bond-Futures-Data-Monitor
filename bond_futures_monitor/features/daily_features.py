@@ -29,7 +29,7 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
         (run_date,),
     ).fetchall()
     futures = conn.execute(
-        "SELECT contract, daily_return, volume, data_source FROM futures_quotes WHERE date = ?",
+        "SELECT contract, daily_return, volume, open_interest, data_source FROM futures_quotes WHERE date = ?",
         (run_date,),
     ).fetchall()
     macro = {
@@ -96,6 +96,7 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
     avg_volume_change = _avg_volume_change(conn, run_date, volumes)
     omo_net_injection_amount = sum(float(row["net_injection_amount"]) for row in omo_rows) if omo_rows else None
     operation_rates = [float(row["operation_rate"]) for row in omo_rows if row["operation_rate"] is not None]
+    rolling_context = _rolling_context(conn, run_date, funding_anchor_name)
     return {
         "date": run_date,
         "yield_10y_change": yield_10y_change,
@@ -162,6 +163,7 @@ def build_daily_features(conn: sqlite3.Connection, run_date: str) -> dict[str, A
                     "indicator_count": len(macro),
                 },
             },
+            "rolling_context": rolling_context,
         },
     }
 
@@ -236,3 +238,76 @@ def _avg_volume_change(
         if contract in prior_volumes and prior_volumes[contract] > 0
     ]
     return mean(pct_changes) if pct_changes else None
+
+
+def _rolling_context(conn: sqlite3.Connection, run_date: str, funding_anchor: str | None) -> dict[str, Any]:
+    """Build point-in-time rolling diagnostics using only observations available by run_date."""
+
+    yield_rows = conn.execute(
+        "SELECT date, yield_value FROM bond_yields WHERE tenor='10Y' AND date <= ? ORDER BY date DESC LIMIT 61",
+        (run_date,),
+    ).fetchall()[::-1]
+    yield_changes = [
+        float(yield_rows[index]["yield_value"]) - float(yield_rows[index - 1]["yield_value"])
+        for index in range(1, len(yield_rows))
+    ]
+    funding_changes: list[float] = []
+    if funding_anchor:
+        rows = conn.execute(
+            "SELECT date, rate_value FROM funding_rates WHERE rate_name=? AND date <= ? ORDER BY date DESC LIMIT 61",
+            (funding_anchor, run_date),
+        ).fetchall()[::-1]
+        funding_changes = [
+            float(rows[index]["rate_value"]) - float(rows[index - 1]["rate_value"])
+            for index in range(1, len(rows))
+        ]
+
+    futures_rows = conn.execute(
+        """
+        SELECT date, AVG(daily_return) AS avg_return, SUM(volume) AS volume,
+               SUM(open_interest) AS open_interest
+        FROM futures_quotes WHERE date <= ? GROUP BY date ORDER BY date DESC LIMIT 20
+        """,
+        (run_date,),
+    ).fetchall()[::-1]
+    current = futures_rows[-1] if futures_rows else None
+    history = futures_rows[:-1]
+    avg_volume_20d = mean(float(row["volume"]) for row in history) if history else None
+    avg_oi_20d = mean(float(row["open_interest"]) for row in history) if history else None
+    current_return = float(current["avg_return"]) if current else None
+    previous_oi = float(history[-1]["open_interest"]) if history else None
+    current_oi = float(current["open_interest"]) if current else None
+    oi_change = (
+        (current_oi - previous_oi) / previous_oi
+        if current_oi is not None and previous_oi not in (None, 0)
+        else None
+    )
+    return {
+        "history_days": len(futures_rows),
+        "yield_10y_change_percentile_60d": _percentile_rank(yield_changes),
+        "funding_change_percentile_60d": _percentile_rank(funding_changes),
+        "futures_return_percentile_20d": _percentile_rank([float(row["avg_return"]) for row in futures_rows]),
+        "volume_ratio_20d": float(current["volume"]) / avg_volume_20d if current and avg_volume_20d else None,
+        "open_interest_ratio_20d": current_oi / avg_oi_20d if current_oi is not None and avg_oi_20d else None,
+        "open_interest_change_1d": oi_change,
+        "price_oi_quadrant": _price_oi_quadrant(current_return, oi_change),
+    }
+
+
+def _percentile_rank(values: list[float]) -> float | None:
+    if len(values) < 5:
+        return None
+    current = values[-1]
+    return sum(value <= current for value in values) / len(values)
+
+
+def _price_oi_quadrant(price_return: float | None, oi_change: float | None) -> str:
+    if price_return is None or oi_change is None:
+        return "数据不足"
+    if price_return >= 0 and oi_change >= 0:
+        return "价涨增仓"
+    if price_return >= 0 and oi_change < 0:
+        return "价涨减仓"
+    if price_return < 0 and oi_change >= 0:
+        return "价跌增仓"
+    return "价跌减仓"

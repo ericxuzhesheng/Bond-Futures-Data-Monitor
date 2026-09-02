@@ -152,6 +152,17 @@ CREATE TABLE IF NOT EXISTS run_log (
     status TEXT NOT NULL,
     message TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS collection_status (
+    date TEXT NOT NULL,
+    dataset TEXT NOT NULL,
+    status TEXT NOT NULL,
+    row_count INTEGER NOT NULL,
+    observation_date TEXT,
+    data_source TEXT NOT NULL,
+    message TEXT NOT NULL,
+    PRIMARY KEY (date, dataset)
+);
 """
 
 
@@ -383,6 +394,34 @@ def log_run(conn: sqlite3.Connection, run_date: str, status: str, message: str) 
     conn.commit()
 
 
+def upsert_collection_status(
+    conn: sqlite3.Connection,
+    run_date: str,
+    dataset: str,
+    status: str,
+    row_count: int,
+    data_source: str,
+    message: str,
+    observation_date: str | None = None,
+) -> None:
+    """Persist whether a dataset is present, confirmed empty, partial, or unavailable."""
+
+    conn.execute(
+        """
+        INSERT INTO collection_status
+        (date, dataset, status, row_count, observation_date, data_source, message)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(date, dataset) DO UPDATE SET
+            status=excluded.status,
+            row_count=excluded.row_count,
+            observation_date=excluded.observation_date,
+            data_source=excluded.data_source,
+            message=excluded.message
+        """,
+        (run_date, dataset, status, row_count, observation_date, data_source, message),
+    )
+
+
 def insert_macro_history(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
     return _insert_many(
         conn,
@@ -461,6 +500,7 @@ def purge_daily_data_for_date(conn: sqlite3.Connection, run_date: str) -> None:
     conn.execute("DELETE FROM macro_history WHERE date = ?", (run_date,))
     conn.execute("DELETE FROM treasury_issuance_calendar WHERE date = ?", (run_date,))
     conn.execute("DELETE FROM yield_curve_comparisons WHERE date = ?", (run_date,))
+    conn.execute("DELETE FROM collection_status WHERE date = ?", (run_date,))
 
 
 def purge_superseded_ai_signals_for_date(conn: sqlite3.Connection, run_date: str) -> None:
@@ -498,6 +538,7 @@ def fetch_table_for_date(conn: sqlite3.Connection, table: str, date: str) -> lis
         "ai_text_signals",
         "daily_features",
         "daily_market_signals",
+        "collection_status",
     }:
         raise ValueError(f"Unsupported table: {table}")
     return conn.execute(f"SELECT * FROM {table} WHERE date = ?", (date,)).fetchall()

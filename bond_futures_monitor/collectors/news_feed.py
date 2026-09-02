@@ -16,6 +16,7 @@ from bond_futures_monitor.retry import retry_call
 
 
 logger = logging.getLogger(__name__)
+_FETCH_STATUS: dict[str, tuple[str, str]] = {}
 
 
 @lru_cache(maxsize=8)
@@ -24,17 +25,25 @@ def fetch_cls_news(run_date: str) -> tuple[dict[str, str], ...]:
 
     items = _fetch_akshare_cls_news(run_date)
     if items:
+        _FETCH_STATUS[run_date] = ("ok", "AkShare 财联社电报可用")
         return items
 
     try:
         return _fetch_tushare_cls_news(run_date)
     except RuntimeError:
+        _FETCH_STATUS[run_date] = ("unavailable", "AkShare 无目标日历史电报，且 Tushare news 无权限")
         logger.warning(
             "No accessible CLS news source for %s; continuing without text signals.",
             run_date,
             exc_info=True,
         )
         return ()
+
+
+def get_cls_news_status(run_date: str) -> tuple[str, str]:
+    """Return the status recorded by the cached fetch for report provenance."""
+
+    return _FETCH_STATUS.get(run_date, ("empty", "当日未匹配到利率债关键词"))
 
 
 def _fetch_akshare_cls_news(run_date: str) -> tuple[dict[str, str], ...]:

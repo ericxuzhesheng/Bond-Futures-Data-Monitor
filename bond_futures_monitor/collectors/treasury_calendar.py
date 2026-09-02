@@ -11,6 +11,8 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from bond_futures_monitor.collectors.status import CollectionResult
+
 
 logger = logging.getLogger(__name__)
 MOF_LIST_URL = "https://www.mof.gov.cn/gkml/bulinggonggao/tongzhitonggao/index.htm"
@@ -25,6 +27,16 @@ def collect_treasury_issuance_calendar(run_date: str) -> list[dict[str, object]]
     except Exception:
         logger.warning("Official MOF Treasury calendar is unavailable for %s.", run_date, exc_info=True)
         return []
+
+
+def collect_treasury_issuance_calendar_result(run_date: str) -> CollectionResult[dict[str, object]]:
+    try:
+        rows = _collect_treasury_issuance_calendar(run_date)
+    except Exception as exc:
+        logger.warning("Official MOF Treasury calendar is unavailable for %s.", run_date, exc_info=True)
+        return CollectionResult([], "unavailable", "mof_official_notice", str(exc))
+    message = "已取得财政部公告" if rows else "查询窗口内未发现已公告招标安排"
+    return CollectionResult(rows, "ok" if rows else "empty", "mof_official_notice", message)
 
 
 def _collect_treasury_issuance_calendar(run_date: str) -> list[dict[str, object]]:
@@ -48,6 +60,7 @@ def _collect_treasury_issuance_calendar(run_date: str) -> list[dict[str, object]
                 candidates[article_url] = title
 
     rows: list[dict[str, object]] = []
+    successful_article_fetches = 0
     for article_url, title in candidates.items():
         try:
             response = session.get(article_url, headers=HEADERS, timeout=20)
@@ -55,6 +68,7 @@ def _collect_treasury_issuance_calendar(run_date: str) -> list[dict[str, object]
         except requests.RequestException as exc:
             logger.warning("MOF notice is temporarily unavailable: %s (%s)", article_url, exc)
             continue
+        successful_article_fetches += 1
         response.encoding = "utf-8"
         text = " ".join(BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True).split())
         parsed = parse_treasury_notice(text)
@@ -73,6 +87,8 @@ def _collect_treasury_issuance_calendar(run_date: str) -> list[dict[str, object]
                     "data_source": "mof_official_notice",
                 }
             )
+    if candidates and successful_article_fetches == 0:
+        raise RuntimeError(f"MOF list returned {len(candidates)} notices but every article request failed")
     return sorted(rows, key=lambda row: (str(row["auction_date"]), str(row["title"])))
 
 

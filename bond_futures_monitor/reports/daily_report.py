@@ -6,6 +6,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+from bond_futures_monitor.reports.charts import generate_report_charts
+
 
 def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -28,6 +30,10 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     curve_comparison = conn.execute(
         "SELECT * FROM yield_curve_comparisons WHERE date = ? ORDER BY CAST(tenor AS INTEGER)", (run_date,)
     ).fetchall()
+    collection_status = {
+        row["dataset"]: dict(row)
+        for row in conn.execute("SELECT * FROM collection_status WHERE date = ? ORDER BY dataset", (run_date,))
+    }
     ai = conn.execute(
         """
         SELECT signal.*, news.title AS news_title, news.source AS news_source
@@ -60,6 +66,11 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     db_status = _database_write_status(conn, run_date)
     prior_yields = _previous_values(conn, "bond_yields", "tenor", "yield_value", run_date)
     prior_funding = _previous_values(conn, "funding_rates", "rate_name", "rate_value", run_date)
+    chart_paths = generate_report_charts(conn, run_date, output_dir)
+    confidence = int(signal_details.get("confidence", 0))
+    bias = signal_details.get("directional_bias", "均衡")
+    conflicts = signal_details.get("conflicts", [])
+    structure_notes = _market_structure_notes(futures, yields, funding, omo, prior_yields, prior_funding)
 
     raw_count = (
         len(futures) + len(yields) + len(funding) + len(omo) + len(news) + len(macro)
@@ -68,36 +79,50 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     lines = [
         f"# 中国国债期货每日真实数据监控报告 - {run_date}",
         "",
+        "## 30秒执行摘要",
+        f"- **结论：{_market_view_label(signal['market_view'])}，中性区间内{bias}**；综合评分 {signal['total_score']:.2f}，置信度 {confidence}/100。",
+        f"- **当日变化：** {structure_notes[0][2:] if structure_notes else '核心数据无可用变化。'}",
+        f"- **核心张力：** {conflicts[0] if conflicts else '有效方向信号未形成明显对冲。'}",
+        f"- **下一日关注：** {_tomorrow_focus(treasury_calendar, collection_status)}",
+        "- 置信度同时反映数据覆盖和多空信号一致性，不是胜率承诺。",
+        "",
         "## 每日市场判断",
         f"- 市场观点：**{_market_view_label(signal['market_view'])}**",
-        f"- 综合评分：**{signal['total_score']:.2f}**",
+        f"- 综合评分：**{signal['total_score']:.2f}**；置信度：**{confidence}/100**",
         "",
-        "## 市场结构提示",
+        "## 核心多周期面板",
+        "| 指标 | 当前 | 1日变化 | 5日变化 | 20日分位 |",
+        "|---|---:|---:|---:|---:|",
     ]
-    lines.extend(_market_structure_notes(futures, yields, funding, omo, prior_yields, prior_funding))
+    lines.extend(_multi_horizon_rows(conn, run_date))
+    lines.extend(["", "## 市场结构提示"])
+    lines.extend(structure_notes)
     lines.extend([
         "",
-        "## 数据真实性检查",
-        f"- 国债期货合约：{len(futures)} 条",
-        f"- 国债收益率期限：{len(yields)} 条",
-        f"- 资金利率：{len(funding)} 条",
-        f"- 公开市场操作：{len(omo)} 条",
-        f"- 政策/新闻文本：{len(news)} 条",
-        f"- 宏观基本面指标：{len(macro)} 条",
-        f"- 国家统计局宏观历史：{len(macro_history)} 条",
-        f"- 财政部国债发行日历：{len(treasury_calendar)} 条",
-        f"- 中债—CFETS 曲线核验：{len(curve_comparison)} 条",
-        f"- 当日真实数据合计：{raw_count} 条",
-        "- 生产流程禁止非真实数据；覆盖不足会直接失败。",
-        "",
+        "## 核心驱动与冲突",
+    "",
         "## 评分拆解",
-        "| 维度 | 分数 | 判断依据 |",
-        "|---|---:|---|",
+        "| 维度 | 权重 | 分数 | 可用 | 判断依据 |",
+        "|---|---:|---:|---|---|",
     ])
     lines.extend(
-        f"| {item['category']} | {float(item['score']):.2f} | {item['reason']} |"
+        f"| {item['category']} | {float(item.get('weight', 1)):.1f} | {float(item['score']):.2f} | "
+        f"{'是' if item.get('available', True) else '否'} | {item['reason']} |"
         for item in score_items
     )
+    if conflicts:
+        lines.extend(["", "**信号冲突：**"] + [f"- {item}" for item in conflicts])
+
+    lines.extend(["", "## 图表快照"])
+    lines.extend(f"![{path.stem}](assets/{path.name})" for path in chart_paths)
+
+    lines.extend(["", "## 期货量价与持仓", "| 合约 | 日收益 | 持仓1日变化 | 成交/20日 | 持仓/20日 | 四象限 |", "|---|---:|---:|---:|---:|---|"])
+    lines.extend(_futures_position_rows(conn, run_date))
+
+    lines.extend(["", "## 曲线结构", "| 结构 | 当前 | 1日变化 | 5日变化 |", "|---|---:|---:|---:|"])
+    lines.extend(_curve_structure_rows(conn, run_date))
+
+    lines.extend(["", "## 可交割券与基差", f"- {_status_sentence(collection_status, 'ctd_basis_irr')}"])
 
     lines.extend(["", "## 特征面板", "| 分组 | 指标 | 数值 |", "|---|---|---:|"])
     lines.extend(_feature_panel_rows(feature_groups))
@@ -140,6 +165,7 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         f"{_format_bp_change(row['rate_value'], prior_funding.get(row['rate_name']))} |"
         for row in funding
     )
+    lines.append(f"- 同业存单/IRS分层：{_status_sentence(collection_status, 'funding_ncd_irs')}。")
 
     lines.extend(["", "## 宏观基本面概览", "| 指标 | 数值 | 数据期 |", "|---|---:|---|"])
     lines.extend(
@@ -155,6 +181,7 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
         "|---|---:|---:|---:|",
     ])
     lines.extend(_macro_history_table_rows(macro_history))
+    lines.extend(_macro_momentum_notes(macro_history))
     lines.append("- 数据来自国家统计局数据发布页，并按日报运行日截断，避免使用事后发布信息。")
 
     lines.extend([
@@ -169,8 +196,13 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
             for row in treasury_calendar
         )
     else:
-        lines.append("| 暂无已公告安排 | — | — | — |")
+        status = collection_status.get("treasury_issuance_calendar", {})
+        label = "经确认暂无已公告安排" if status.get("status") == "empty" else "数据源不可用，不代表无发行"
+        lines.append(f"| {label} | — | — | — |")
     lines.append("- 展示运行日前财政部已发布、且招标日在运行日前3日至后14日内的记账式国债安排。")
+    seven_day_amount = sum(float(row["planned_amount"]) for row in treasury_calendar[:])
+    lines.append(f"- 当前可见窗口计划发行额：{seven_day_amount:.0f} 亿元；到期与净融资缺少同口径官方明细，不做差额估算。")
+    lines.append(f"- 招标结果：{_status_sentence(collection_status, 'treasury_auction_results')}")
 
     lines.extend(
         [
@@ -219,6 +251,23 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     lines.extend(f"- {item}" for item in key_drivers)
     lines.extend(["", "## 风险提示"])
     lines.extend(f"- {item}" for item in risk_notes)
+    lines.extend(["", "## 跨市场核验", f"- {_status_sentence(collection_status, 'cross_market')}"])
+    lines.extend(["", "## 历史信号检验（探索性）"])
+    lines.extend(_historical_validation(conn, run_date))
+    lines.extend([
+        "",
+        "## 附录：数据状态与新鲜度",
+        "| 数据集 | 状态 | 行数 | 观测日 | 来源 | 说明 |",
+        "|---|---|---:|---|---|---|",
+    ])
+    lines.extend(_collection_status_rows(collection_status))
+    lines.extend([
+        "",
+        "## 附录：数据真实性检查",
+        f"- 国债期货合约：{len(futures)} 条；收益率期限：{len(yields)} 条；资金利率：{len(funding)} 条。",
+        f"- 公开市场操作：{len(omo)} 条；新闻：{len(news)} 条；宏观：{len(macro)} 条。",
+        f"- 当日真实数据合计：{raw_count} 条。核心覆盖不足会直接失败。",
+    ])
     lines.extend(
         [
             "",
@@ -247,6 +296,200 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     path = output_dir / f"{run_date}_daily_report.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
+
+
+def _multi_horizon_rows(conn: sqlite3.Connection, run_date: str) -> list[str]:
+    rows: list[str] = []
+    yield_series = conn.execute(
+        "SELECT date, yield_value AS value FROM bond_yields WHERE tenor='10Y' AND date<=? ORDER BY date DESC LIMIT 20",
+        (run_date,),
+    ).fetchall()[::-1]
+    rows.append(_level_horizon_row("10Y国债收益率", yield_series, "%", bp=True))
+    anchor_row = conn.execute(
+        "SELECT rate_name FROM funding_rates WHERE date=? AND rate_name IN ('DR007','FDR007') ORDER BY rate_name LIMIT 1",
+        (run_date,),
+    ).fetchone()
+    if anchor_row:
+        anchor = str(anchor_row["rate_name"])
+        series = conn.execute(
+            "SELECT date, rate_value AS value FROM funding_rates WHERE rate_name=? AND date<=? ORDER BY date DESC LIMIT 20",
+            (anchor, run_date),
+        ).fetchall()[::-1]
+        rows.append(_level_horizon_row(anchor, series, "%", bp=True))
+    futures = conn.execute(
+        "SELECT date, AVG(daily_return) AS value FROM futures_quotes WHERE date<=? GROUP BY date ORDER BY date DESC LIMIT 20",
+        (run_date,),
+    ).fetchall()[::-1]
+    if futures:
+        values = [float(row["value"]) for row in futures]
+        five = _compound(values[-5:])
+        rows.append(f"| 期货平均收益 | {values[-1]:+.3%} | {values[-1]:+.3%} | {five:+.3%} | {_pct_rank(values):.0%} |")
+    activity = conn.execute(
+        "SELECT date, SUM(volume) AS volume, SUM(open_interest) AS oi FROM futures_quotes WHERE date<=? GROUP BY date ORDER BY date DESC LIMIT 20",
+        (run_date,),
+    ).fetchall()[::-1]
+    if len(activity) >= 2:
+        volumes = [float(row["volume"]) for row in activity]
+        oi = [float(row["oi"]) for row in activity]
+        rows.append(f"| 总成交量 | {volumes[-1]:,.0f} | {volumes[-1]/volumes[-2]-1:+.1%} | — | {_pct_rank(volumes):.0%} |")
+        five_oi = f"{oi[-1]/oi[-6]-1:+.1%}" if len(oi) >= 6 else "—"
+        rows.append(
+            f"| 总持仓量 | {oi[-1]:,.0f} | {oi[-1]/oi[-2]-1:+.1%} | {five_oi} | {_pct_rank(oi):.0%} |"
+        )
+    return rows or ["| 数据不足 | — | — | — | — |"]
+
+
+def _level_horizon_row(label: str, series, unit: str, bp: bool = False) -> str:
+    if not series:
+        return f"| {label} | — | — | — | — |"
+    values = [float(row["value"]) for row in series]
+    one = values[-1] - values[-2] if len(values) >= 2 else None
+    five = values[-1] - values[-6] if len(values) >= 6 else None
+    scale, suffix = (100, " bp") if bp else (1, unit)
+    return (
+        f"| {label} | {values[-1]:.3f}{unit} | "
+        f"{one*scale:+.1f}{suffix if one is not None else ''}" if one is not None else f"| {label} | {values[-1]:.3f}{unit} | —"
+    ) + (f" | {five*scale:+.1f}{suffix} |" if five is not None else " | — |") + f" {_pct_rank(values):.0%} |"
+
+
+def _futures_position_rows(conn: sqlite3.Connection, run_date: str) -> list[str]:
+    result = []
+    contracts = [row["contract"] for row in conn.execute("SELECT contract FROM futures_quotes WHERE date=? ORDER BY contract", (run_date,))]
+    for contract in contracts:
+        history = conn.execute(
+            "SELECT daily_return, volume, open_interest FROM futures_quotes WHERE contract=? AND date<=? ORDER BY date DESC LIMIT 20",
+            (contract, run_date),
+        ).fetchall()[::-1]
+        current = history[-1]
+        prior = history[-2] if len(history) >= 2 else None
+        baseline = history[:-1] or history
+        avg_volume = sum(float(row["volume"]) for row in baseline) / len(baseline)
+        avg_oi = sum(float(row["open_interest"]) for row in baseline) / len(baseline)
+        ret = float(current["daily_return"])
+        oi_change = float(current["open_interest"]) / float(prior["open_interest"]) - 1 if prior else None
+        quadrant = _quadrant(ret, oi_change)
+        result.append(
+            f"| {contract} | {ret:+.3%} | {_pct(oi_change)} | {float(current['volume'])/avg_volume:.2f}x | "
+            f"{float(current['open_interest'])/avg_oi:.2f}x | {quadrant} |"
+        )
+    return result or ["| 无 | — | — | — | — | 数据不足 |"]
+
+
+def _curve_structure_rows(conn: sqlite3.Connection, run_date: str) -> list[str]:
+    dates = [row["date"] for row in conn.execute(
+        "SELECT DISTINCT date FROM bond_yields WHERE date<=? ORDER BY date DESC LIMIT 6", (run_date,)
+    )]
+    maps = []
+    for value_date in dates:
+        maps.append({row["tenor"]: float(row["yield_value"]) for row in conn.execute("SELECT tenor,yield_value FROM bond_yields WHERE date=?", (value_date,))})
+    definitions = {
+        "2s10s": lambda curve: curve.get("10Y") - curve.get("2Y") if "10Y" in curve and "2Y" in curve else None,
+        "10s30s": lambda curve: curve.get("30Y") - curve.get("10Y") if "30Y" in curve and "10Y" in curve else None,
+        "2s5s10s蝶式": lambda curve: curve.get("2Y") - 2 * curve.get("5Y") + curve.get("10Y") if all(key in curve for key in ("2Y", "5Y", "10Y")) else None,
+    }
+    result = []
+    for label, fn in definitions.items():
+        values = [fn(curve) for curve in maps]
+        current = values[0] if values else None
+        one = current - values[1] if current is not None and len(values) > 1 and values[1] is not None else None
+        five = current - values[5] if current is not None and len(values) > 5 and values[5] is not None else None
+        result.append(f"| {label} | {_bp(current)} | {_bp(one)} | {_bp(five)} |")
+    return result
+
+
+def _macro_momentum_notes(rows) -> list[str]:
+    by_indicator: dict[str, list[tuple[str, float]]] = {}
+    for row in rows:
+        by_indicator.setdefault(str(row["indicator"]), []).append((str(row["period"]), float(row["value"])))
+    notes = []
+    labels = {"CPI_YOY": "CPI", "PPI_YOY": "PPI", "PMI_MFG": "制造业PMI"}
+    for indicator, values in by_indicator.items():
+        ordered = sorted(values, reverse=True)
+        if len(ordered) < 2:
+            continue
+        direction = "改善" if ordered[0][1] > ordered[1][1] else "走弱" if ordered[0][1] < ordered[1][1] else "持平"
+        extra = f"，距50为 {ordered[0][1]-50:+.1f}" if indicator == "PMI_MFG" else ""
+        notes.append(f"- {labels.get(indicator, indicator)} 较前值{direction} {ordered[0][1]-ordered[1][1]:+.1f}{extra}。")
+    return notes
+
+
+def _historical_validation(conn: sqlite3.Connection, run_date: str) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT q.date, AVG(q.daily_return) AS ret, s.total_score
+        FROM futures_quotes q LEFT JOIN daily_market_signals s ON s.date=q.date
+        WHERE q.date<=? GROUP BY q.date ORDER BY q.date
+        """,
+        (run_date,),
+    ).fetchall()
+    observations = []
+    for index, row in enumerate(rows):
+        score = row["total_score"]
+        if score in (None, 0) or index + 1 >= len(rows):
+            continue
+        direction = 1 if float(score) > 0 else -1
+        next_1d = float(rows[index + 1]["ret"])
+        next_5d = _compound([float(item["ret"]) for item in rows[index + 1:index + 6]]) if index + 5 < len(rows) else None
+        observations.append((direction * next_1d > 0, direction * next_5d > 0 if next_5d is not None else None))
+    if not observations:
+        return ["- 样本不足，暂无法计算。"]
+    hits_1d = sum(item[0] for item in observations) / len(observations)
+    valid_5d = [item[1] for item in observations if item[1] is not None]
+    text = f"- 历史非中性信号 {len(observations)} 个，次日方向命中率 {hits_1d:.1%}"
+    if valid_5d:
+        text += f"，5日方向命中率 {sum(valid_5d)/len(valid_5d):.1%}（n={len(valid_5d)}）"
+    return [text + "。", "- 该检验未扣除交易成本，也未做样本外验证，只用于监测规则是否失效。"]
+
+
+def _collection_status_rows(statuses: dict) -> list[str]:
+    labels = {"ok": "正常", "partial": "部分", "empty": "经确认无记录", "unavailable": "不可用"}
+    return [
+        f"| {key} | {labels.get(value.get('status'), value.get('status', '未知'))} | {value.get('row_count', 0)} | "
+        f"{value.get('observation_date') or '—'} | {_escape_markdown(value.get('data_source', '—'))} | {_escape_markdown(value.get('message', ''))} |"
+        for key, value in statuses.items()
+    ] or ["| 无状态记录 | 未知 | 0 | — | — | 旧数据库尚未记录采集状态 |"]
+
+
+def _status_sentence(statuses: dict, dataset: str) -> str:
+    status = statuses.get(dataset)
+    if not status:
+        return "未记录数据状态"
+    labels = {"ok": "正常", "partial": "部分可用", "empty": "经确认无记录", "unavailable": "不可用"}
+    return f"{labels.get(status['status'], status['status'])}：{status['message']}"
+
+
+def _tomorrow_focus(calendar, statuses: dict) -> str:
+    if calendar:
+        nearest = calendar[0]
+        return f"关注 {nearest['auction_date']} {nearest['tenor']} 国债招标（{nearest['planned_amount']:.0f}亿元）及资金利率分层。"
+    return f"资金利率分层与长端持仓变化；发行日历{_status_sentence(statuses, 'treasury_issuance_calendar')}。"
+
+
+def _compound(values: list[float]) -> float:
+    result = 1.0
+    for value in values:
+        result *= 1 + value
+    return result - 1
+
+
+def _pct_rank(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return sum(value <= values[-1] for value in values) / len(values)
+
+
+def _pct(value: float | None) -> str:
+    return "—" if value is None else f"{value:+.2%}"
+
+
+def _bp(value: float | None) -> str:
+    return "—" if value is None else f"{value*100:+.1f} bp"
+
+
+def _quadrant(ret: float, oi_change: float | None) -> str:
+    if oi_change is None:
+        return "数据不足"
+    return ("价涨" if ret >= 0 else "价跌") + ("增仓" if oi_change >= 0 else "减仓")
 
 
 def _database_write_status(conn: sqlite3.Connection, run_date: str) -> dict[str, object]:

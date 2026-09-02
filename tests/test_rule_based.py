@@ -23,6 +23,8 @@ def test_rule_based_scoring_bullish():
     assert signal["total_score"] > 0
     assert set(signal["details"]["score_summary"]) == EXPECTED_CATEGORIES
     assert "利率方向" in signal["details"]["score_summary"]
+    assert 0 <= signal["details"]["confidence"] <= 100
+    assert all("weight" in item and "available" in item for item in signal["details"]["score_items"])
 
 
 def test_rule_based_scoring_bearish():

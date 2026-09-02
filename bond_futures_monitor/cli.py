@@ -8,14 +8,15 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from bond_futures_monitor.ai.text_signal import classify_news_item
-from bond_futures_monitor.collectors.curve_comparison import collect_yield_curve_comparison
+from bond_futures_monitor.collectors.curve_comparison import collect_yield_curve_comparison_result
 from bond_futures_monitor.collectors.funding import collect_funding_rates
 from bond_futures_monitor.collectors.futures import collect_futures_quotes
 from bond_futures_monitor.collectors.macro import collect_macro_indicators
-from bond_futures_monitor.collectors.macro_history import collect_nbs_macro_history
+from bond_futures_monitor.collectors.news_feed import get_cls_news_status
+from bond_futures_monitor.collectors.macro_history import collect_nbs_macro_history_result
 from bond_futures_monitor.collectors.open_market import collect_open_market_operations
 from bond_futures_monitor.collectors.policy_news import collect_policy_news
-from bond_futures_monitor.collectors.treasury_calendar import collect_treasury_issuance_calendar
+from bond_futures_monitor.collectors.treasury_calendar import collect_treasury_issuance_calendar_result
 from bond_futures_monitor.collectors.yield_curve import collect_bond_yields
 from bond_futures_monitor.config import get_settings
 from bond_futures_monitor.database import (
@@ -37,6 +38,7 @@ from bond_futures_monitor.database import (
     purge_superseded_ai_signals_for_date,
     upsert_daily_features,
     upsert_daily_market_signal,
+    upsert_collection_status,
 )
 from bond_futures_monitor.features.daily_features import build_daily_features
 from bond_futures_monitor.reports.csv_export import export_features_csv
@@ -116,15 +118,50 @@ def run_daily_pipeline(conn, run_date: str, use_live_data: bool, reports_output_
     with conn:
         purge_daily_data_for_date(conn, run_date)
 
-        insert_futures_quotes(conn, collect_futures_quotes(run_date, use_live_data))
-        insert_bond_yields(conn, collect_bond_yields(run_date, use_live_data))
-        insert_funding_rates(conn, collect_funding_rates(run_date, use_live_data))
-        insert_open_market_operations(conn, collect_open_market_operations(run_date, use_live_data))
-        insert_policy_news(conn, collect_policy_news(run_date, use_live_data))
-        insert_macro_indicators(conn, collect_macro_indicators(run_date, use_live_data))
-        insert_macro_history(conn, collect_nbs_macro_history(run_date))
-        insert_treasury_issuance_calendar(conn, collect_treasury_issuance_calendar(run_date))
-        insert_yield_curve_comparisons(conn, collect_yield_curve_comparison(run_date))
+        core = [
+            ("futures_quotes", collect_futures_quotes(run_date, use_live_data), insert_futures_quotes),
+            ("bond_yields", collect_bond_yields(run_date, use_live_data), insert_bond_yields),
+            ("funding_rates", collect_funding_rates(run_date, use_live_data), insert_funding_rates),
+            ("open_market_operations", collect_open_market_operations(run_date, use_live_data), insert_open_market_operations),
+            ("policy_news", collect_policy_news(run_date, use_live_data), insert_policy_news),
+            ("macro_indicators", collect_macro_indicators(run_date, use_live_data), insert_macro_indicators),
+        ]
+        for dataset, rows, inserter in core:
+            inserter(conn, rows)
+            sources = sorted({str(row.get("data_source", "unknown")) for row in rows})
+            status = "ok" if rows else "empty"
+            message = "采集成功" if rows else "当日未返回记录"
+            if dataset == "policy_news" and not rows:
+                status, message = get_cls_news_status(run_date)
+            upsert_collection_status(
+                conn, run_date, dataset, status, len(rows),
+                ", ".join(sources) or "none", message,
+                run_date,
+            )
+
+        optional = [
+            ("macro_history", collect_nbs_macro_history_result(run_date), insert_macro_history),
+            ("treasury_issuance_calendar", collect_treasury_issuance_calendar_result(run_date), insert_treasury_issuance_calendar),
+            ("yield_curve_comparisons", collect_yield_curve_comparison_result(run_date), insert_yield_curve_comparisons),
+        ]
+        for dataset, result, inserter in optional:
+            inserter(conn, result.rows)
+            upsert_collection_status(
+                conn, run_date, dataset, result.status, len(result.rows), result.source,
+                result.message[:500], result.observation_date,
+            )
+
+        # These research fields require inputs that the verified public sources do
+        # not publish as a complete historical set. Explicit states prevent an
+        # absent value from being mistaken for zero or "no event".
+        unavailable = {
+            "ctd_basis_irr": "缺少逐合约可交割券、转换因子与现券净价，不做估算",
+            "treasury_auction_results": "尚无经验证的历史招标结果结构化源",
+            "cross_market": "外围公开接口当前连接不稳定，不纳入生产评分",
+            "funding_ncd_irs": "AAA同业存单与FR007 IRS历史接口尚未通过稳定性验证，不与回购利率混用",
+        }
+        for dataset, message in unavailable.items():
+            upsert_collection_status(conn, run_date, dataset, "unavailable", 0, "none", message)
         validate_real_data_coverage(conn, run_date)
 
         signals = [classify_news_item(dict(row)) for row in fetch_policy_news(conn, run_date)]

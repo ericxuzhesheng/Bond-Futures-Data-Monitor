@@ -10,6 +10,8 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from bond_futures_monitor.collectors.status import CollectionResult
+
 
 logger = logging.getLogger(__name__)
 NBS_LIST_URL = "https://www.stats.gov.cn/sj/zxfb/"
@@ -24,6 +26,19 @@ def collect_nbs_macro_history(run_date: str, periods: int = 6) -> list[dict[str,
     except Exception:
         logger.warning("Official NBS macro history is unavailable for %s.", run_date, exc_info=True)
         return []
+
+
+def collect_nbs_macro_history_result(run_date: str, periods: int = 6) -> CollectionResult[dict[str, object]]:
+    try:
+        rows = _collect_nbs_macro_history(run_date, periods)
+    except Exception as exc:
+        logger.warning("Official NBS macro history is unavailable for %s.", run_date, exc_info=True)
+        return CollectionResult([], "unavailable", "nbs_official_release", str(exc))
+    expected = periods * len(_indicators())
+    status = "ok" if len(rows) >= expected else "partial" if rows else "empty"
+    message = f"获取 {len(rows)}/{expected} 条官方宏观历史"
+    observation = max((str(row["release_date"]) for row in rows), default=None)
+    return CollectionResult(rows, status, "nbs_official_release", message, observation)
 
 
 def _collect_nbs_macro_history(run_date: str, periods: int) -> list[dict[str, object]]:
