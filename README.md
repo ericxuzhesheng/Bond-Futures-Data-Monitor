@@ -417,7 +417,7 @@ python -m bond_futures_monitor.cli generate-report --date 2026-06-08
 cron: "1 11 * * 1-5"
 ```
 
-这对应北京时间工作日每天 19:01。
+这对应北京时间周一至周五每天 19:01。执行前检查交易日历：中秋、国庆等休市日跳过行情采集、报告生成和提交，不改写已有数据。日历优先使用 Tushare 中金所日历；无权限时使用 AkShare 新浪公开交易日历，并校验日期覆盖范围。日历不可用时明确失败；交易日缺少真实行情仍会报错。
 
 GitHub Actions 无需 Tushare 权限即可运行；如需启用备用源，可在仓库 Secrets 中配置 `TUSHARE_TOKEN`。
 
@@ -425,10 +425,10 @@ workflow 会执行：
 
 1. 拉取仓库（自带版本控制的 SQLite 数据库，含全部历史）。
 2. 安装依赖。
-3. 解析运行日期。
-4. 执行每日监控流程。
-5. 运行测试。
-6. 提交更新后的日报、特征时间序列 CSV 和数据库。
+3. 运行测试。
+4. 解析运行日期并检查交易日历。
+5. 仅交易日执行每日监控流程。
+6. 仅交易日提交更新后的日报、特征时间序列 CSV 和数据库。
 
 数据库文件直接纳入 git 版本控制（`data/bond_futures_monitor.db`，在 `.gitattributes` 中标记为二进制）。每次 CI checkout 即获得完整的前期交易日历史，跨日特征（收益率变化、DR007 变化、量能变化）始终可计分，不依赖任何外部缓存。
 
@@ -902,7 +902,7 @@ The repository has a daily workflow configured:
 cron: "1 11 * * 1-5"
 ```
 
-This corresponds to 19:01 Beijing time on weekdays.
+This corresponds to 19:01 Beijing time, Monday through Friday. A trading-calendar gate skips collection, report generation and publication on exchange holidays without changing existing data. It prefers the Tushare CFFEX calendar and falls back to the AkShare/Sina public trading calendar with explicit date-coverage checks. An unavailable calendar fails visibly; missing real quotes on an open trading day still fail validation.
 
 GitHub Actions can run without Tushare permissions. Configure `TUSHARE_TOKEN` in repository Secrets only to enable the optional fallback.
 
@@ -910,10 +910,10 @@ The workflow executes:
 
 1. Checkout the repository (includes the version-controlled SQLite database with full history).
 2. Install dependencies.
-3. Parse the run date.
-4. Execute the daily monitoring pipeline.
-5. Run tests.
-6. Commit updated reports, feature time-series CSV, and database.
+3. Run tests.
+4. Parse the run date and check the trading calendar.
+5. Execute the daily monitoring pipeline only on trading days.
+6. Commit updated reports, feature time-series CSV, and database only on trading days.
 
 The database file is directly under git version control (`data/bond_futures_monitor.db`, marked as binary in `.gitattributes`). Each CI checkout obtains complete prior trading-day history; cross-day features (yield changes, DR007 changes, volume changes) are always computable without any external cache.
 

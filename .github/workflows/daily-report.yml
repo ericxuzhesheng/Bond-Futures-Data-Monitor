@@ -4,8 +4,7 @@ on:
   schedule:
     # Beijing time 19:01 = UTC 11:01, weekdays only.
     # GitHub scheduled workflows can be delayed or dropped at the start of the hour.
-    # Chinese public holidays are not covered; the pipeline handles non-trading
-    # days gracefully via purge_daily_data_for_date idempotency.
+    # The calendar gate below skips exchange holidays before any data refresh.
     - cron: "1 11 * * 1-5"
   workflow_dispatch:
     inputs:
@@ -66,7 +65,23 @@ jobs:
           fi
           echo "RUN_DATE=$RUN_DATE" >> "$GITHUB_ENV"
 
+      - name: Check trading calendar
+        id: calendar
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from bond_futures_monitor.trading_calendar import is_trading_day
+
+          run_date = os.environ["RUN_DATE"]
+          is_open = is_trading_day(run_date)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"is_open={str(is_open).lower()}\n")
+          print(f"{run_date}: {'trading day' if is_open else 'market closed; skipping report and publication'}")
+          PY
+
       - name: Run daily monitor
+        if: steps.calendar.outputs.is_open == 'true'
         run: python -m bond_futures_monitor.cli run --date "$RUN_DATE"
 
       # The SQLite database is version-controlled (see .gitignore), so each run
@@ -75,6 +90,7 @@ jobs:
       # is evicted after 7 days of inactivity or when the repo cache exceeds
       # its size limit.
       - name: Commit report and database
+        if: steps.calendar.outputs.is_open == 'true'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
