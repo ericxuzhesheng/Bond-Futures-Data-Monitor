@@ -191,6 +191,8 @@ def test_daily_report_generation(tmp_path):
         report_path = generate_daily_report(conn, RUN_DATE, report_dir)
 
     content = report_path.read_text(encoding="utf-8")
+    index = (report_dir / "2026_index.md").read_text(encoding="utf-8")
+    assert f"[{RUN_DATE}]({report_path.name})" in index
     assert report_path.exists()
     assert content.startswith("# 国债期货日报\n")
     assert "## 当日简评" in content

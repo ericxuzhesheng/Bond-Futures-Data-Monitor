@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 
 from bond_futures_monitor.reports.charts import generate_report_charts
+from bond_futures_monitor.reports.year_index import generate_year_index
 
 
 def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: Path) -> Path:
@@ -290,6 +291,7 @@ def generate_daily_report(conn: sqlite3.Connection, run_date: str, output_dir: P
     validate_report_tables(content)
     path = output_dir / f"{run_date}_daily_report.md"
     path.write_text(content, encoding="utf-8")
+    generate_year_index(output_dir, int(run_date[:4]))
     return path
 
 

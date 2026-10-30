@@ -22,6 +22,7 @@ docker run --rm \
 git config user.name "aliyun-runner"
 git config user.email "aliyun-runner@noreply.local"
 git add -f "reports_output/${RUN_DATE}_daily_report.md" reports_output/daily_features.csv
+git add -f "reports_output/${RUN_DATE:0:4}_index.md"
 git add data/bond_futures_monitor.db
 if git diff --cached --quiet; then
     echo "No changes to commit."

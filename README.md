@@ -402,10 +402,13 @@ python -m bond_futures_monitor.cli run --date 2026-06-08
 python -m bond_futures_monitor.cli generate-report --date 2026-06-08
 ```
 
-`run` 与 `generate-report` 均输出两类文件到 `reports_output/`：
+`run` 与 `generate-report` 均输出以下文件到 `reports_output/`：
 
 - `{date}_daily_report.md` — 当日 Markdown 日报；
+- `{year}_index.md` — 按月份列出该年已生成的日报，每次生成日报时刷新，并随每日自动发布提交；
 - `daily_features.csv` — 累计特征时间序列（每天一行：跨日特征、各维度得分、综合评分与市场观点），每次运行从数据库全量重建，可直接导入 Excel/pandas 做时序分析。
+
+`backfill_{year}_manifest.json`、`{year}_warmup_validation.json` 和 `{year}_omo_scope_repair.json` 分别是历史回补清单、预热验收结果和 OMO 修复记录，仅由对应历史处理脚本生成，不随每日运行改写；其文件更新时间不代表日报是否更新。
 
 ### 自动调度
 
@@ -887,10 +890,13 @@ Generate a report from existing database only:
 python -m bond_futures_monitor.cli generate-report --date 2026-06-08
 ```
 
-Both `run` and `generate-report` output two file types to `reports_output/`:
+Both `run` and `generate-report` output the following files to `reports_output/`:
 
 - `{date}_daily_report.md` — the day's Markdown report;
+- `{year}_index.md` — monthly navigation for that year's existing reports, refreshed whenever a report is generated and committed by daily publication;
 - `daily_features.csv` — cumulative feature time series (one row per day: cross-day features, dimension scores, composite score, and market view), fully rebuilt from the database on each run, directly importable into Excel/pandas for time-series analysis.
+
+`backfill_{year}_manifest.json`, `{year}_warmup_validation.json`, and `{year}_omo_scope_repair.json` record historical backfill, warmup acceptance, and OMO repair results respectively. Only the corresponding historical scripts produce them; daily runs preserve their original scope and evidence, so their modification dates do not indicate daily report freshness.
 
 ### Scheduling
 

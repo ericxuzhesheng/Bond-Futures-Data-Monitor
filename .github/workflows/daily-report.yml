@@ -98,6 +98,7 @@ jobs:
           git add -f "reports_output/${RUN_DATE}_daily_report.md"
           git add -f reports_output/assets/${RUN_DATE}_*.svg
           git add -f reports_output/daily_features.csv
+          git add -f "reports_output/${RUN_DATE:0:4}_index.md"
           git add data/bond_futures_monitor.db
           if git diff --cached --quiet; then
             echo "No changes to commit."

@@ -29,6 +29,7 @@ from bond_futures_monitor.config import get_settings
 from bond_futures_monitor.features.daily_features import build_daily_features
 from bond_futures_monitor.reports.csv_export import export_features_csv
 from bond_futures_monitor.reports.daily_report import generate_daily_report
+from bond_futures_monitor.reports.year_index import generate_year_index
 from bond_futures_monitor.signals.rule_based import generate_market_signal
 from bond_futures_monitor.validation import validate_real_data_coverage
 
@@ -393,21 +394,7 @@ def main(argv=None):
             for table in ("open_market_operations", "policy_news", "treasury_issuance_calendar", "yield_curve_comparisons")
         }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    lines = [f"# {args.year} 年国债期货日报", "",
-             f"截至 {end}，按中金所交易日历应有 {len(shared['dates'])} 期；本次完成 {len(manifest['completed'])} 期。", "",
-             f"预热覆盖 {shared['warmup_dates'][0]} 至 {shared['warmup_dates'][-1]}，共 {WARMUP_DAYS} 个交易日：前60日初始化，后60日按完整窗口重算评分。预热日不计入2026年日报数量。", "",
-             "采用新版排版与当前评分规则回溯重建，不是当年实际发布的版本。月度宏观按官方发布日期截断。", "",
-             "未缓存的历史新闻及部分补充数据仍缺失，详见每期附录及 [回跑清单](" + manifest_path.name + ")。", "",
-             "部分历史曲线使用中债备用源，2年期为1年与3年线性插值；不能视为直接发布值。", ""]
-    month = None
-    for d in shared["dates"]:
-        if d[:7] != month:
-            month = d[:7]
-            lines.extend([f"## {month}", ""])
-        lines.append(f"- [{d}]({d}_daily_report.md)" if d in manifest["completed"] else f"- {d}：本次失败，见回跑清单")
-        if d == shared["dates"][-1] or shared["dates"][shared["dates"].index(d) + 1][:7] != month:
-            lines.append("")
-    (settings.reports_output_dir / f"{args.year}_index.md").write_text("\n".join(lines), encoding="utf-8")
+    generate_year_index(settings.reports_output_dir, args.year)
     print(f"Completed {len(manifest['completed'])}/{len(shared['dates'])}; failed {len(manifest['failed'])}; {manifest_path}")
     return 1 if manifest["failed"] else 0
 
